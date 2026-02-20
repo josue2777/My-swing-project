@@ -4,6 +4,10 @@ Ce bot de trading automatique pour MetaTrader 5 utilise une stratégie basée su
 
 ## 🚀 Logique de Trading
 
+### 0. Unité de Temps (Timeframe)
+Le bot est **multi-timeframe par défaut**. Il utilise l'unité de temps du graphique sur lequel il est déposé.
+- **Recommandé** : M15, H1 ou H4 pour un meilleur équilibre entre précision et bruit de marché.
+
 ### 1. Conditions d'Entrée
 Le bot recherche l'alignement entre la tendance et les zones de prix clés :
 - **ACHAT** : Signal d'achat SB (croisement du prix au-dessus de la ligne SBT) + Le prix de clôture doit être à l'intérieur d'une zone de **Support** active (rectangle vert).
