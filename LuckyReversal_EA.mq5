@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024, Trading Bot"
 #property link      "https://www.mql5.com"
-#property version   "1.00"
+#property version   "1.10"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -14,27 +14,17 @@
 input string   InpIndiName   = "lucky-reversal"; // Indicator Name
 input int      InpBuyBuffer  = 0;                // Buy Signal Buffer Index
 input int      InpSellBuffer = 1;                // Sell Signal Buffer Index
-input int      InpSupBuffer  = 2;                // Support Zone Buffer Index
-input int      InpResBuffer  = 3;                // Resistance Zone Buffer Index
 
 //--- Inputs Trade Management
-input double   InpTP4Interval  = 0.01500;  // TP4 Search Interval (Price)
 input double   InpFallbackDist = 0.00310;  // Fallback Distance (Price)
 input int      InpMagic        = 654321;   // Magic Number
-input int      InpStopLossPips = 300;      // Fixed Stop Loss in Pips (fallback)
+input int      InpStopLossPips = 300;      // Fixed Stop Loss in Pips
 
 //--- Global Variables
 CTrade         trade;
 int            handle_lucky;
 int            lucky_signal = 0; // 1: Buy, -1: Sell
 double         last_close = 0;
-
-// Struct to store SR Zones from Indicator
-struct SRZone {
-    double top;
-    double bottom;
-    bool isSupport;
-};
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -69,10 +59,10 @@ void OnTick()
     // Manage existing trades
     ManageTrades();
 
-    // Check for new bar or specific signal logic
+    // Check for new bar
     if(!isNewBar()) return;
 
-    // Detect Signals and Zones
+    // Detect Signals
     DetectSignals();
 
     // Check for entry
@@ -149,116 +139,61 @@ int GetTradeCount()
 //+------------------------------------------------------------------+
 void CheckEntry()
 {
-    if(lucky_signal == 0) return;
-
-    double close1 = iClose(_Symbol, _Period, 1);
-
-    // Read Zones
-    double sup_buf[], res_buf[];
-    ArraySetAsSeries(sup_buf, true);
-    ArraySetAsSeries(res_buf, true);
-
-    bool inZone = false;
-    SRZone zone;
-
-    if(lucky_signal == 1)
+    if(lucky_signal != 0)
     {
-        if(CopyBuffer(handle_lucky, InpSupBuffer, 1, 1, sup_buf) > 0)
-        {
-            if(sup_buf[0] != 0 && sup_buf[0] != EMPTY_VALUE)
-            {
-                // Price is near support zone?
-                // Lucky reversal zones are often single values representing the line/box level
-                if(MathAbs(close1 - sup_buf[0]) < InpTP4Interval) // Example proximity check
-                {
-                    inZone = true;
-                    zone.top = sup_buf[0];
-                    zone.bottom = sup_buf[0] - InpFallbackDist; // Estimate width
-                    zone.isSupport = true;
-                }
-            }
-        }
-    }
-    else if(lucky_signal == -1)
-    {
-        if(CopyBuffer(handle_lucky, InpResBuffer, 1, 1, res_buf) > 0)
-        {
-            if(res_buf[0] != 0 && res_buf[0] != EMPTY_VALUE)
-            {
-                if(MathAbs(close1 - res_buf[0]) < InpTP4Interval)
-                {
-                    inZone = true;
-                    zone.top = res_buf[0] + InpFallbackDist;
-                    zone.bottom = res_buf[0];
-                    zone.isSupport = false;
-                }
-            }
-        }
-    }
-
-    if(inZone)
-    {
-        ExecuteTrade(lucky_signal, zone);
+        ExecuteTrade(lucky_signal);
     }
 }
 
 //+------------------------------------------------------------------+
 //| Execute Trade with Multi-TP/SL                                   |
 //+------------------------------------------------------------------+
-void ExecuteTrade(int signal, SRZone &zone)
+void ExecuteTrade(int signal)
 {
     double price = (signal == 1) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double sl = 0;
-    double tp1 = 0, tp2 = 0, tp3 = 0, tp4 = 0;
-
-    // SL calculation
-    if(signal == 1)
-        sl = price - InpStopLossPips * _Point;
-    else
-        sl = price + InpStopLossPips * _Point;
+    double sl = (signal == 1) ? price - InpStopLossPips * _Point : price + InpStopLossPips * _Point;
 
     double balance = AccountInfoDouble(ACCOUNT_BALANCE);
     double dist = InpFallbackDist;
-
-    // Determine TPs based on tiers
-    if(balance <= 5000)
-    {
-        tp1 = (signal == 1) ? price + dist : price - dist;
-    }
-    else if(balance <= 400000)
-    {
-        tp1 = (signal == 1) ? price + dist * 0.5 : price - dist * 0.5;
-        tp2 = (signal == 1) ? price + dist * 0.8 : price - dist * 0.8;
-        tp3 = (signal == 1) ? price + dist : price - dist;
-    }
-    else
-    {
-        tp1 = (signal == 1) ? price + dist * 0.5 : price - dist * 0.5;
-        tp2 = (signal == 1) ? price + dist * 0.7 : price - dist * 0.7;
-        tp3 = (signal == 1) ? price + dist * 0.9 : price - dist * 0.9;
-        tp4 = (signal == 1) ? price + dist : price - dist;
-    }
-
     int count = GetTradeCount();
     double lot = GetLotSize();
+
+    double tp1 = (signal == 1) ? price + dist * 0.5 : price - dist * 0.5;
+    double tp2 = (signal == 1) ? price + dist * 0.8 : price - dist * 0.8;
+    double tp3 = (signal == 1) ? price + dist : price - dist;
+    double tp4 = (signal == 1) ? price + dist * 1.2 : price - dist * 1.2;
 
     for(int i=0; i<count; i++)
     {
         double current_tp = 0;
         int level = 0;
-        if(balance <= 5000) { current_tp = tp1; level = 1; }
-        else if(balance <= 400000)
+
+        // "3 forced positions" rule for capital >= 10 trades
+        if(count >= 10 && i >= (count - 3))
         {
-            if(i < count * 0.5) { current_tp = tp1; level = 1; }
-            else if(i < count * 0.8) { current_tp = tp2; level = 2; }
-            else { current_tp = tp3; level = 3; }
+            current_tp = 0; // Remains until next signal
+            level = 0;
         }
         else
         {
-            if(i < count * 0.5) { current_tp = tp1; level = 1; }
-            else if(i < count * 0.7) { current_tp = tp2; level = 2; }
-            else if(i < count * 0.9) { current_tp = tp3; level = 3; }
-            else { current_tp = tp4; level = 4; }
+            if(balance <= 5000)
+            {
+                current_tp = (signal == 1) ? price + dist : price - dist;
+                level = 1;
+            }
+            else if(balance <= 400000)
+            {
+                if(i < count * 0.5) { current_tp = tp1; level = 1; }
+                else if(i < count * 0.8) { current_tp = tp2; level = 2; }
+                else { current_tp = tp3; level = 3; }
+            }
+            else
+            {
+                if(i < count * 0.5) { current_tp = tp1; level = 1; }
+                else if(i < count * 0.7) { current_tp = tp2; level = 2; }
+                else if(i < count * 0.9) { current_tp = tp3; level = 3; }
+                else { current_tp = tp4; level = 4; }
+            }
         }
 
         string comment = StringFormat("TPLevel:%d", level);
@@ -276,7 +211,7 @@ void ManageTrades()
 {
     bool level1_exists = false;
 
-    // First pass: identify which levels are still active
+    // First pass: identify if level 1 trades are still active
     for(int i=PositionsTotal()-1; i>=0; i--)
     {
         ulong ticket = PositionGetTicket(i);
