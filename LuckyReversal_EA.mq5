@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024, Trading Bot"
 #property link      "https://www.mql5.com"
-#property version   "1.20"
+#property version   "1.30"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -17,6 +17,7 @@ input int              InpBuyBuffer  = 0;                // Buy Signal Buffer In
 input int              InpSellBuffer = 1;                // Sell Signal Buffer Index
 
 //--- Inputs Trade Management
+input bool     InpGoatBoolMode = true;     // Enable GoatBool Closing Mode
 input double   InpFallbackDist = 0.00310;  // Fallback Distance (Price)
 input int      InpMagic        = 654321;   // Magic Number
 input int      InpStopLossPips = 300;      // Fixed Stop Loss in Pips
@@ -57,17 +58,22 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
-    // Manage existing trades
+    bool new_bar = isNewBar();
+
+    // 1. Detect Signals first on new bar
+    if(new_bar)
+    {
+        DetectSignals();
+    }
+
+    // 2. Manage existing trades (closing if adverse signal detected)
     ManageTrades();
 
-    // Check for new bar on specified timeframe
-    if(!isNewBar()) return;
-
-    // Detect Signals
-    DetectSignals();
-
-    // Check for entry
-    CheckEntry();
+    // 3. Check for entry (opening if signal detected on new bar)
+    if(new_bar)
+    {
+        CheckEntry();
+    }
 
     last_close = iClose(_Symbol, InpTimeframe, 1);
 }
@@ -197,7 +203,7 @@ void ExecuteTrade(int signal)
             }
         }
 
-        string comment = StringFormat("TPLevel:%d", level);
+        string comment = StringFormat("goatbool|TP:%d", level);
         if(signal == 1)
             trade.Buy(lot, _Symbol, price, sl, current_tp, comment);
         else
@@ -220,7 +226,7 @@ void ManageTrades()
         {
             if(PositionGetInteger(POSITION_MAGIC) != InpMagic || PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
             string comment = PositionGetString(POSITION_COMMENT);
-            if(StringFind(comment, "TPLevel:1") >= 0) level1_exists = true;
+            if(StringFind(comment, "TP:1") >= 0) level1_exists = true;
         }
     }
 
@@ -232,15 +238,21 @@ void ManageTrades()
         {
             if(PositionGetInteger(POSITION_MAGIC) != InpMagic || PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
 
+            string comment = PositionGetString(POSITION_COMMENT);
             double entry = PositionGetDouble(POSITION_PRICE_OPEN);
             double current_sl = PositionGetDouble(POSITION_SL);
             int type = (int)PositionGetInteger(POSITION_TYPE);
 
-            // Adverse signal exit
-            if((type == POSITION_TYPE_BUY && lucky_signal == -1) || (type == POSITION_TYPE_SELL && lucky_signal == 1))
+            // GoatBool closing logic: Close if adverse signal detected
+            bool isGoatBool = (StringFind(comment, "goatbool") >= 0);
+
+            if((isGoatBool && InpGoatBoolMode) || (!isGoatBool))
             {
-                trade.PositionClose(ticket);
-                continue;
+                if((type == POSITION_TYPE_BUY && lucky_signal == -1) || (type == POSITION_TYPE_SELL && lucky_signal == 1))
+                {
+                    trade.PositionClose(ticket);
+                    continue;
+                }
             }
 
             // Trailing Logic: SL to Break-Even after TP1 hit
