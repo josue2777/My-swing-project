@@ -5,15 +5,16 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024, Trading Bot"
 #property link      "https://www.mql5.com"
-#property version   "1.10"
+#property version   "1.20"
 #property strict
 
 #include <Trade\Trade.mqh>
 
 //--- Inputs Indicator
-input string   InpIndiName   = "lucky-reversal"; // Indicator Name
-input int      InpBuyBuffer  = 0;                // Buy Signal Buffer Index
-input int      InpSellBuffer = 1;                // Sell Signal Buffer Index
+input string           InpIndiName   = "lucky-reversal"; // Indicator Name
+input ENUM_TIMEFRAMES  InpTimeframe  = PERIOD_M5;        // Timeframe for Signals
+input int              InpBuyBuffer  = 0;                // Buy Signal Buffer Index
+input int              InpSellBuffer = 1;                // Sell Signal Buffer Index
 
 //--- Inputs Trade Management
 input double   InpFallbackDist = 0.00310;  // Fallback Distance (Price)
@@ -33,7 +34,7 @@ int OnInit()
 {
     trade.SetExpertMagicNumber(InpMagic);
 
-    handle_lucky = iCustom(_Symbol, _Period, InpIndiName);
+    handle_lucky = iCustom(_Symbol, InpTimeframe, InpIndiName);
     if(handle_lucky == INVALID_HANDLE)
     {
         Print("Error creating lucky-reversal handle");
@@ -59,7 +60,7 @@ void OnTick()
     // Manage existing trades
     ManageTrades();
 
-    // Check for new bar
+    // Check for new bar on specified timeframe
     if(!isNewBar()) return;
 
     // Detect Signals
@@ -68,7 +69,7 @@ void OnTick()
     // Check for entry
     CheckEntry();
 
-    last_close = iClose(_Symbol, _Period, 1);
+    last_close = iClose(_Symbol, InpTimeframe, 1);
 }
 
 //+------------------------------------------------------------------+
@@ -77,7 +78,7 @@ void OnTick()
 bool isNewBar()
 {
     static datetime last_time = 0;
-    datetime current_time = iTime(_Symbol, _Period, 0);
+    datetime current_time = iTime(_Symbol, InpTimeframe, 0);
     if(current_time != last_time)
     {
         last_time = current_time;

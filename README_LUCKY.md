@@ -4,6 +4,10 @@ Ce bot de trading automatique pour MetaTrader 5 utilise l'indicateur **Lucky Rev
 
 ## 🚀 Logique de Trading
 
+### 0. Unité de Temps (Timeframe)
+- **Défaut** : Le bot est configuré pour chercher les signaux sur l'unité de temps **M5** (5 minutes) par défaut.
+- **Configurable** : Vous pouvez modifier l'unité de temps via le paramètre `InpTimeframe` dans les réglages du bot.
+
 ### 1. Conditions d'Entrée
 Le bot réagit immédiatement aux signaux de l'indicateur :
 - **ACHAT** : Dès qu'un signal d'achat est détecté par l'indicateur (Buffer 0).
@@ -49,6 +53,7 @@ Si un signal opposé à la position actuelle apparaît (ex: signal de Vente alor
 ## ⚙️ Paramètres (Inputs)
 
 - `InpIndiName` : Nom de l'indicateur (Défaut: "lucky-reversal").
+- `InpTimeframe` : Unité de temps pour la détection (Défaut: M5).
 - `InpFallbackDist` : Distance par défaut pour les TP (Défaut: 0.00310).
 - `InpStopLossPips` : Stop Loss fixe de sécurité en pips.
 - `InpMagic` : Numéro magique unique pour ce bot.
