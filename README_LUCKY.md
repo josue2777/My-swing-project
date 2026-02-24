@@ -48,6 +48,14 @@ La taille des lots et le nombre de trades s'adaptent automatiquement :
 ### 6. Trailing Stop Loss (Mise à l'équilibre)
 - **Break-Even** : Dès que le niveau **TP 1** est atteint, le Stop Loss de toutes les positions restantes est automatiquement déplacé au prix d'ouverture (**Point mort**).
 
+## 💡 Conseils de Stratégies de Scalping
+
+Pour optimiser les performances de ce bot, voici les meilleures stratégies de scalping à envisager :
+
+1.  **Suivi de Tendance (EMA 200)** : Ne prendre les signaux d'achat que si le prix est au-dessus de l'EMA 200, et les signaux de vente en dessous. Cela évite de trader contre le flux majeur.
+2.  **Filtre de Volatilité (ATR)** : N'entrer en position que lorsque l'ATR indique une volatilité suffisante, assurant que le prix atteindra vos TP rapidement.
+3.  **Heures de Trading** : Privilégier les sessions de Londres et New York pour le scalping M5, car le volume y est le plus élevé.
+
 ## 🛠 Installation
 
 1. Copiez `LuckyReversal_EA.mq5` dans `MQL5/Experts`.
