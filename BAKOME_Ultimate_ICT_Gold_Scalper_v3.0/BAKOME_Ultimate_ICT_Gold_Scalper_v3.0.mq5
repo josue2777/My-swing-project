@@ -265,7 +265,7 @@ private:
       ArraySetAsSeries(volumes, true);
       if(CopyTickVolume(_Symbol, PERIOD_M5, 0, periods, volumes) <= 0) return 0;
       double sum = 0;
-      for(int i = 0; i < periods; i++) sum += volumes[i];
+      for(int i = 0; i < periods; i++) sum += (double)volumes[i];
       return sum / periods;
    }
 
