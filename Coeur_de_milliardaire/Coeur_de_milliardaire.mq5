@@ -27,6 +27,7 @@ input int TslPoints = 10; //Trailing Stop loss (10 points = 1 pip)
 input ENUM_TIMEFRAMES Timeframe = PERIOD_CURRENT; //Time frame to run
 input int InpMagic = 123; //Expert advisor identification
 input string TradeComment = "Scalping Robot";
+input bool InpInvertTrading = false; // Invert Buy/Sell signals (True = Inverted, False = Normal)
 
 //--- Protected Settings (Moved from inputs)
 string ExpirationDate = "2026.12.03";
@@ -178,6 +179,7 @@ int OnInit()
    trade.SetExpertMagicNumber(InpMagic);
    ChartSetInteger(0, CHART_SHOW_GRID, false);
 
+   TradingMode = InpInvertTrading ? 2 : 1;
    AccountInitialBalance = AccountInfoDouble(ACCOUNT_BALANCE);
 
    StringTrimLeft(TelegramToken); StringTrimRight(TelegramToken);
@@ -405,29 +407,37 @@ void OnTick()
      {
       if(ord.SelectByIndex(i))
         {
-         if(ord.OrderType()==ORDER_TYPE_BUY_STOP && ord.Symbol()==_Symbol && ord.Magic()==InpMagic)
+         if((ord.OrderType()==ORDER_TYPE_BUY_STOP || ord.OrderType()==ORDER_TYPE_BUY_LIMIT) && ord.Symbol()==_Symbol && ord.Magic()==InpMagic)
             BuyTotal++;
-         if(ord.OrderType()==ORDER_TYPE_SELL_STOP && ord.Symbol()==_Symbol && ord.Magic()==InpMagic)
+         if((ord.OrderType()==ORDER_TYPE_SELL_STOP || ord.OrderType()==ORDER_TYPE_SELL_LIMIT) && ord.Symbol()==_Symbol && ord.Magic()==InpMagic)
             SellTotal++;
         }
      }
 
-   if(BuyTotal <= 0)
+   if(TradingMode == 1)
      {
-      double high = findHigh();
-      if(high > 0)
+      if(BuyTotal <= 0)
         {
-         if(TradingMode == 1) SendBuyOrder(high);
-         else SendSellOrder(high, true);
+         double high = findHigh();
+         if(high > 0) SendBuyOrder(high);
+        }
+      if(SellTotal <= 0)
+        {
+         double low = findLow();
+         if(low > 0) SendSellOrder(low);
         }
      }
-   if(SellTotal <= 0)
+   else // Inverted Trading Mode
      {
-      double low = findLow();
-      if(low > 0)
+      if(SellTotal <= 0)
         {
-         if(TradingMode == 1) SendSellOrder(low);
-         else SendBuyOrder(low, true);
+         double high = findHigh();
+         if(high > 0) SendSellOrder(high, true);
+        }
+      if(BuyTotal <= 0)
+        {
+         double low = findLow();
+         if(low > 0) SendBuyOrder(low, true);
         }
      }
   }
