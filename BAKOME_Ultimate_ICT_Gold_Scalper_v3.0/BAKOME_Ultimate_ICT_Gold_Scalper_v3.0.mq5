@@ -491,7 +491,7 @@ private:
       double beTrigger = m_currentATR * BE_TriggerATR;
       if(m_position.SelectByTicket(pos.ticket)) {
          if(m_position.Profit() >= beTrigger) {
-            double entry = m_position.OpenPrice();
+            double entry = m_position.PriceOpen();
             m_trade.PositionModify(pos.ticket, entry, m_position.TakeProfit());
             pos.breakEvenSet = true;
          }
