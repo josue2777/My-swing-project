@@ -452,7 +452,7 @@ private:
       for(int i = 0; i < PositionsTotal(); i++)
          if(m_position.SelectByIndex(i) && m_position.Magic() == m_magicNumber) openPositions++;
       if(openPositions >= MaxPositions) return false;
-      double spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+      double spread = (double)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
       if(spread > MaxSpreadPoints) return false;
       if(m_currentATR / m_symbol.Point() < MinATR_Points) return false;
       if(!IsInTradingSession()) return false;
