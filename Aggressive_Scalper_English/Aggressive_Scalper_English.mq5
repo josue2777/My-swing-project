@@ -90,8 +90,8 @@ void OnTick()
    text += "Stoch Signal: " + DoubleToString(signal0, 2) + "\n";
 
    // Display Potential Signals zones
-   if (main0 < 20) text += "ZONE: OVERSOLD (Waiting for BUY...)\n";
-   else if (main0 > 80) text += "ZONE: OVERBOUGHT (Waiting for SELL...)\n";
+   if (main0 < 20) text += "ZONE: OVERSOLD (Waiting for SELL...)\n";
+   else if (main0 > 80) text += "ZONE: OVERBOUGHT (Waiting for BUY...)\n";
    else text += "ZONE: Neutral (Waiting)\n";
 
    Comment(text); // Print dashboard to chart
@@ -118,21 +118,10 @@ void OnTick()
    // SELL SIGNAL: Cross DOWN in Overbought zone (> 80)
    bool sellSignal = (main1 > signal1) && (main0 < signal0) && (main0 > 80);
 
-   // --- 4. EXECUTION ---
+   // --- 4. EXECUTION (Inverted Strategy) ---
    if(buySignal)
      {
-      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-      double sl = ask - StopLossPoints * _Point;
-      double tp = ask + TakeProfitPoints * _Point;
-
-      if(trade.Buy(FixedLot, _Symbol, ask, sl, tp, "Aggressive Buy"))
-        {
-         lastTradeCandleTime = currentCandleTime; // Mark this candle as traded
-         Print("BUY ORDER OPENED! Ticket: ", trade.ResultOrder());
-        }
-     }
-   else if(sellSignal)
-     {
+      // Inverted: Oversold buySignal triggers a SELL order with Sell SL/TP
       double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
       double sl = bid + StopLossPoints * _Point;
       double tp = bid - TakeProfitPoints * _Point;
@@ -141,6 +130,19 @@ void OnTick()
         {
          lastTradeCandleTime = currentCandleTime; // Mark this candle as traded
          Print("SELL ORDER OPENED! Ticket: ", trade.ResultOrder());
+        }
+     }
+   else if(sellSignal)
+     {
+      // Inverted: Overbought sellSignal triggers a BUY order with Buy SL/TP
+      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double sl = ask - StopLossPoints * _Point;
+      double tp = ask + TakeProfitPoints * _Point;
+
+      if(trade.Buy(FixedLot, _Symbol, ask, sl, tp, "Aggressive Buy"))
+        {
+         lastTradeCandleTime = currentCandleTime; // Mark this candle as traded
+         Print("BUY ORDER OPENED! Ticket: ", trade.ResultOrder());
         }
      }
   }
