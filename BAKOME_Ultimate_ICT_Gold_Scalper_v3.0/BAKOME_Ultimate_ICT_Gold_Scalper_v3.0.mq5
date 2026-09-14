@@ -521,7 +521,7 @@ private:
       }
    }
 
-   void ExecuteTrade(int type) {
+   void ExecuteTrade(ENUM_ORDER_TYPE type) {
       if(!CanOpenNewPosition() || CheckDailyLimits()) return;
       double entry, sl, tp;
       if(type == ORDER_TYPE_BUY) CalculateBullishEntry(entry, sl, tp);
