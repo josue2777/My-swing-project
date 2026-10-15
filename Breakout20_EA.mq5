@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024, Trading Bot"
 #property link      "https://www.mql5.com"
-#property version   "1.00"
+#property version   "1.01"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -205,11 +205,19 @@ void RecalculateAndPlaceOrders()
     double sell_sl = NormalizeDouble(sell_price + InpStopLossPoints * point, _Digits);
     double sell_tp = NormalizeDouble(sell_price - InpTakeProfitPoints * point, _Digits);
 
-    trade.BuyStop(lot, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Breakout20 Buy");
-    trade.SellStop(lot, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Breakout20 Sell");
+    bool res1 = trade.BuyStop(lot, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Breakout20 Buy");
+    bool res2 = trade.SellStop(lot, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Breakout20 Sell");
 
-    g_bars_since_setup = 0;
-    g_need_recalc      = false;
+    if(res1 && res2)
+    {
+        g_bars_since_setup = 0;
+        g_need_recalc      = false;
+    }
+    else
+    {
+        // If placing orders failed, keep g_need_recalc = true so it retries on next tick
+        g_need_recalc = true;
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -230,8 +238,13 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 
             if(magic == (long)InpMagic && sym == _Symbol)
             {
+                // Position opened: delete any remaining opposite pending order
+                if(entry == DEAL_ENTRY_IN)
+                {
+                    DeleteAllPendingOrders();
+                }
                 // Position closed (SL, TP, or manual exit)
-                if(entry == DEAL_ENTRY_OUT || entry == DEAL_ENTRY_INOUT || entry == DEAL_ENTRY_OUT_BY)
+                else if(entry == DEAL_ENTRY_OUT || entry == DEAL_ENTRY_INOUT || entry == DEAL_ENTRY_OUT_BY)
                 {
                     g_need_recalc = true;
                 }
@@ -246,6 +259,14 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 void OnTick()
 {
     int current_pos_count = GetPositionCount();
+    int current_pending_count = GetPendingOrderCount();
+
+    // If a position is active, clean up any leftover opposite pending orders
+    if(current_pos_count > 0 && current_pending_count > 0)
+    {
+        DeleteAllPendingOrders();
+        current_pending_count = 0;
+    }
 
     // Secondary check for position closure
     if(g_prev_pos_count > 0 && current_pos_count == 0)
@@ -253,6 +274,12 @@ void OnTick()
         g_need_recalc = true;
     }
     g_prev_pos_count = current_pos_count;
+
+    // Safety fallback: If no position and no pending orders exist, force recalculation
+    if(current_pos_count == 0 && current_pending_count == 0)
+    {
+        g_need_recalc = true;
+    }
 
     // Detect new bar
     datetime current_bar_time = iTime(_Symbol, _Period, 0);
@@ -263,7 +290,7 @@ void OnTick()
         g_last_bar_time = current_bar_time;
 
         // If no open positions and pending orders exist, track elapsed candles
-        if(current_pos_count == 0 && GetPendingOrderCount() > 0)
+        if(current_pos_count == 0 && current_pending_count > 0)
         {
             g_bars_since_setup++;
             if(g_bars_since_setup >= InpRecalcBars)
