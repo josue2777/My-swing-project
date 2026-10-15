@@ -5,10 +5,11 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024, Trading Bot"
 #property link      "https://www.mql5.com"
-#property version   "1.00"
-#property description "Expert Advisor MQL5 - Stratégie de Breakout par Cycles"
+#property version   "1.10"
+#property description "Expert Advisor MQL5 - Stratégie de Breakout par Cycles Optimisée"
 #property description "Gère un cycle complet unique avec ordres en attente, annulation opposée,"
-#property description "Break Even dynamique, Trailing Stop progressif et gestion stricte des risques."
+#property description "filtre de tendance EMA, distance dynamique ATR, Break Even dynamique,"
+#property description "Trailing Stop progressif et gestion stricte des risques."
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -31,9 +32,17 @@ enum ENUM_EXECUTION_MODE
 input group "=== Paramètres Généraux ==="
 input ulong              InpMagic                 = 777888;          // Magic Number
 input ENUM_EXECUTION_MODE InpExecutionMode         = MODE_STANDARD;   // Mode d'exécution des ordres
-input int                InpDistancePoints        = 150;             // Distance des ordres en attente (en Points)
+input int                InpDistancePoints        = 250;             // Distance fixe des ordres en attente (en Points)
+input bool               InpUseDynamicDistance    = true;            // Utiliser une distance dynamique basée sur l'ATR
+input double             InpATRDistanceMultiplier = 1.5;             // Multiplicateur ATR pour la distance dynamique
 input ulong              InpSlippage              = 10;              // Slippage maximal autorisé (en Points)
 input int                InpMaxSpreadPoints       = 50;              // Spread maximal autorisé (0 = désactivé)
+
+//--- Filtre de Tendance
+input group "=== Filtre de Tendance (EMA) ==="
+input bool               InpUseTrendFilter        = true;            // Activer le filtre de tendance EMA
+input int                InpMAPeriod              = 200;             // Période de la Moyenne Mobile
+input ENUM_MA_METHOD     InpMAType                = MODE_EMA;        // Type de Moyenne Mobile
 
 //--- Gestion du Lot et du Risque
 input group "=== Gestion du Capital & Lot ==="
@@ -49,21 +58,21 @@ input int                InpFixedTakeProfitPoints = 300;             // Take Pro
 
 //--- Break Even avec Protection de Profit
 input group "=== Break Even Amélioré ==="
-input int                InpBreakEvenTriggerPoints= 150;             // Profit requis pour déclencher le Break Even (en Points)
-input int                InpBreakEvenProfitPoints = 30;              // Profit sécurisé au Break Even (en Points)
+input int                InpBreakEvenTriggerPoints= 200;             // Profit requis pour déclencher le Break Even (en Points)
+input int                InpBreakEvenProfitPoints = 50;              // Profit sécurisé au Break Even (en Points)
 
 //--- Profit Lock (Verrouillage Progressif des Gains)
 input group "=== Verrouillage des Profits (Profit Lock) ==="
-input bool               InpUseProfitLock         = false;           // Activer le verrouillage progressif des gains
-input int                InpProfitLockLevel1Points= 500;             // Profit Niveau 1 pour verrouiller (en Points)
-input int                InpProfitLockLock1Points = 200;             // Profit sécurisé Niveau 1 (en Points)
-input int                InpProfitLockLevel2Points= 1000;            // Profit Niveau 2 pour verrouiller (en Points)
-input int                InpProfitLockLock2Points = 500;             // Profit sécurisé Niveau 2 (en Points)
+input bool               InpUseProfitLock         = true;            // Activer le verrouillage progressif des gains
+input int                InpProfitLockLevel1Points= 400;             // Profit Niveau 1 pour verrouiller (en Points)
+input int                InpProfitLockLock1Points = 150;             // Profit sécurisé Niveau 1 (en Points)
+input int                InpProfitLockLevel2Points= 800;             // Profit Niveau 2 pour verrouiller (en Points)
+input int                InpProfitLockLock2Points = 400;             // Profit sécurisé Niveau 2 (en Points)
 
 //--- Trailing Stop (Fixe ou ATR)
 input group "=== Trailing Stop Amélioré ==="
-input int                InpTrailingStartPoints   = 200;             // Profit pour activer le Trailing Stop (en Points)
-input int                InpTrailingDistancePoints= 150;             // Distance du Trailing Stop fixe (en Points)
+input int                InpTrailingStartPoints   = 250;             // Profit pour activer le Trailing Stop (en Points)
+input int                InpTrailingDistancePoints= 200;             // Distance du Trailing Stop fixe (en Points)
 input bool               InpUseATRTrailing        = false;           // Activer le Trailing Stop dynamique basé sur l'ATR
 input int                InpATRTrailingPeriod     = 14;              // Période de l'ATR Trailing
 input ENUM_TIMEFRAMES    InpATRTrailingTimeframe  = PERIOD_CURRENT;  // Timeframe de l'ATR Trailing
@@ -79,13 +88,13 @@ input int                InpMaxCandlesPending     = 10;              // Nb max d
 
 //--- Filtre ATR (Optionnel)
 input group "=== Filtre ATR (Optionnel) ==="
-input bool               InpUseATRFilter          = false;           // Activer le filtre ATR
+input bool               InpUseATRFilter          = true;            // Activer le filtre ATR
 input int                InpATRPeriod             = 14;              // Période de l'ATR
 input ENUM_TIMEFRAMES    InpATRTimeframe          = PERIOD_CURRENT;  // Timeframe de l'ATR
-input double             InpATRMinPoints          = 50.0;            // Valeur ATR minimale (en Points)
-input double             InpATRMaxPoints          = 500.0;           // Valeur ATR maximale (0 = pas de max)
+input double             InpATRMinPoints          = 80.0;            // Valeur ATR minimale (en Points)
+input double             InpATRMaxPoints          = 800.0;           // Valeur ATR maximale (0 = pas de max)
 
-//--- Filtre Horaire (Optionnel / Amélioration)
+//--- Filtre Horaire (Optionnel)
 input group "=== Filtre Horaire (Optionnel) ==="
 input bool               InpUseTimeFilter         = false;           // Activer le filtre de session de trading
 input int                InpStartHour             = 8;               // Heure de début de session (0-23)
@@ -95,11 +104,34 @@ input int                InpEndHour               = 20;              // Heure de
 //| Variables Globales                                              |
 //+------------------------------------------------------------------+
 CTrade         trade;                       // Objet d'exécution des transactions
-int            handle_atr = INVALID_HANDLE;          // Handle pour le filtre ATR
+int            handle_atr = INVALID_HANDLE;          // Handle pour le filtre ATR & distance dynamique
 int            handle_atr_trailing = INVALID_HANDLE; // Handle pour le Trailing ATR
+int            handle_ma = INVALID_HANDLE;           // Handle pour le filtre de tendance EMA
 datetime       cycle_start_time = 0;        // Heure de début du cycle actuel
 bool           is_be_applied = false;       // Drapeau indiquant si le Break Even a été appliqué
 datetime       last_sl_mod_time = 0;        // Horodatage de la dernière modification du Stop Loss
+
+//+------------------------------------------------------------------+
+//| Prototypes de fonctions                                         |
+//+------------------------------------------------------------------+
+void   SetTradeFillingType();
+double NormalizePrice(double price);
+double NormalizeVolume(double volume);
+bool   CheckStopLevel(double order_price, double market_price);
+bool   CheckSLModificationValid(double new_sl, double current_price);
+double CalculateLotSize(double sl_distance_points);
+double CalculateReferencePrice();
+double GetEffectiveDistancePoints();
+int    GetTrendDirection();
+bool   CheckSpread();
+bool   CheckTimeFilter();
+bool   CheckATRFilter();
+int    CountOpenPositions();
+int    CountPendingOrders();
+void   CancelAllPendingOrders();
+void   CheckPendingOrdersExpiration();
+void   PlacePendingOrders();
+void   ManageOpenPosition();
 
 //+------------------------------------------------------------------+
 //| Configure le type de remplissage (Filling Type) selon le symbole |
@@ -125,13 +157,24 @@ int OnInit()
     trade.SetDeviationInPoints(InpSlippage);
     SetTradeFillingType();
 
-    // Initialisation du filtre ATR si activé
-    if(InpUseATRFilter)
+    // Initialisation du handle ATR (utilisé pour le filtre ATR et/ou la distance dynamique)
+    if(InpUseATRFilter || InpUseDynamicDistance)
     {
         handle_atr = iATR(_Symbol, InpATRTimeframe, InpATRPeriod);
         if(handle_atr == INVALID_HANDLE)
         {
             PrintFormat("ERREUR [OnInit]: Échec de création du handle ATR pour %s.", _Symbol);
+            return(INIT_FAILED);
+        }
+    }
+
+    // Initialisation du filtre de tendance EMA si activé
+    if(InpUseTrendFilter)
+    {
+        handle_ma = iMA(_Symbol, PERIOD_CURRENT, InpMAPeriod, 0, InpMAType, PRICE_CLOSE);
+        if(handle_ma == INVALID_HANDLE)
+        {
+            PrintFormat("ERREUR [OnInit]: Échec de création du handle MA pour %s.", _Symbol);
             return(INIT_FAILED);
         }
     }
@@ -147,7 +190,7 @@ int OnInit()
         }
     }
 
-    PrintFormat("INITIALISATION [OnInit]: BreakoutCycle_EA chargé avec succès sur %s (%s). Magic Number: %i",
+    PrintFormat("INITIALISATION [OnInit]: BreakoutCycle_EA v1.10 chargé avec succès sur %s (%s). Magic Number: %i",
                 _Symbol, EnumToString(_Period), InpMagic);
 
     return(INIT_SUCCEEDED);
@@ -158,11 +201,17 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-    // Libération des handles ATR
+    // Libération des handles
     if(handle_atr != INVALID_HANDLE)
     {
         IndicatorRelease(handle_atr);
         handle_atr = INVALID_HANDLE;
+    }
+
+    if(handle_ma != INVALID_HANDLE)
+    {
+        IndicatorRelease(handle_ma);
+        handle_ma = INVALID_HANDLE;
     }
 
     if(handle_atr_trailing != INVALID_HANDLE)
@@ -237,11 +286,9 @@ bool CheckStopLevel(double order_price, double market_price)
 
 //+------------------------------------------------------------------+
 //| Vérifie la validité d'une modification de Stop Loss             |
-//| (Spread, StopLevel, FreezeLevel et Délai minimum entre modifs)   |
 //+------------------------------------------------------------------+
 bool CheckSLModificationValid(double new_sl, double current_price)
 {
-    // 1. Vérification du délai minimum entre deux modifications de SL
     if(InpMinSecondsBetweenSLMod > 0)
     {
         datetime current_time = TimeCurrent();
@@ -251,10 +298,8 @@ bool CheckSLModificationValid(double new_sl, double current_price)
         }
     }
 
-    // 2. Vérification du Spread actuel
     if(!CheckSpread()) return false;
 
-    // 3. Vérification du Stop Level & Freeze Level du broker
     int stop_level   = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
     int freeze_level = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
 
@@ -300,11 +345,60 @@ double CalculateLotSize(double sl_distance_points)
         return NormalizeVolume(InpFixedLotSize);
     }
 
-    // Calcul de la valeur par point pour 1 lot complet
     double point_value_per_lot = (tick_value / tick_size) * _Point;
     double calculated_lot     = risk_amount / (sl_distance_points * point_value_per_lot);
 
     return NormalizeVolume(calculated_lot);
+}
+
+//+------------------------------------------------------------------+
+//| Calcule la distance effective des ordres (Fixe ou Dynamique ATR) |
+//+------------------------------------------------------------------+
+double GetEffectiveDistancePoints()
+{
+    if(InpUseDynamicDistance && handle_atr != INVALID_HANDLE)
+    {
+        double atr_val[];
+        ArraySetAsSeries(atr_val, true);
+        if(CopyBuffer(handle_atr, 0, 0, 1, atr_val) > 0)
+        {
+            double atr_points = atr_val[0] / _Point;
+            double dyn_dist = atr_points * InpATRDistanceMultiplier;
+            if(dyn_dist > 10.0) return dyn_dist;
+        }
+    }
+    return (double)InpDistancePoints;
+}
+
+//+------------------------------------------------------------------+
+//| Obtenir la direction de tendance de la Moyenne Mobile            |
+//| Retourne: 1 (Haussier), -1 (Baissier), 0 (Neutre/Non actif)      |
+//+------------------------------------------------------------------+
+int GetTrendDirection()
+{
+    if(!InpUseTrendFilter || handle_ma == INVALID_HANDLE) return 0;
+
+    double ma_val[];
+    ArraySetAsSeries(ma_val, true);
+    if(CopyBuffer(handle_ma, 0, 0, 1, ma_val) < 1)
+    {
+        Print("ERREUR [MA]: Impossible de lire la valeur de la Moyenne Mobile.");
+        return 0;
+    }
+
+    double close_prices[];
+    ArraySetAsSeries(close_prices, true);
+    if(CopyClose(_Symbol, PERIOD_CURRENT, 0, 1, close_prices) < 1)
+    {
+        return 0;
+    }
+
+    double current_close = close_prices[0];
+
+    if(current_close > ma_val[0]) return 1;  // Tendance haussière -> Achats autorisés
+    if(current_close < ma_val[0]) return -1; // Tendance baissière -> Ventes autorisées
+
+    return 0;
 }
 
 //+------------------------------------------------------------------+
@@ -316,7 +410,8 @@ void PlacePendingOrders()
     if(!CheckSpread() || !CheckTimeFilter() || !CheckATRFilter()) return;
 
     double ref_price = CalculateReferencePrice();
-    double distance  = InpDistancePoints * _Point;
+    double dist_pts  = GetEffectiveDistancePoints();
+    double distance  = dist_pts * _Point;
 
     double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
     double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -331,13 +426,16 @@ void PlacePendingOrders()
     double sell_tp = 0;
 
     // Détermination de la distance de SL pour le calcul du lot
-    double sl_distance_pts = InpDistancePoints;
+    double sl_distance_pts = dist_pts;
     if(InpUseFixedSLTPMode || InpExecutionMode == MODE_INVERTED)
     {
-        sl_distance_pts = (InpFixedStopLossPoints > 0) ? InpFixedStopLossPoints : InpDistancePoints;
+        sl_distance_pts = (InpFixedStopLossPoints > 0) ? InpFixedStopLossPoints : dist_pts;
     }
 
     double lot = CalculateLotSize(sl_distance_pts);
+
+    // Récupération de la direction du filtre de tendance
+    int trend = GetTrendDirection();
 
     // Initialisation du drapeau BE pour le nouveau cycle
     is_be_applied = false;
@@ -346,79 +444,105 @@ void PlacePendingOrders()
     // Mode Standard (Buy Stop au-dessus, Sell Stop en-dessous)
     if(InpExecutionMode == MODE_STANDARD)
     {
-        buy_price  = NormalizePrice(ref_price + distance);
-        buy_sl     = InpUseFixedSLTPMode ? ((InpFixedStopLossPoints > 0) ? NormalizePrice(buy_price - InpFixedStopLossPoints * _Point) : 0) : NormalizePrice(ref_price);
-        buy_tp     = (InpFixedTakeProfitPoints > 0) ? NormalizePrice(buy_price + InpFixedTakeProfitPoints * _Point) : 0;
-
-        sell_price = NormalizePrice(ref_price - distance);
-        sell_sl    = InpUseFixedSLTPMode ? ((InpFixedStopLossPoints > 0) ? NormalizePrice(sell_price + InpFixedStopLossPoints * _Point) : 0) : NormalizePrice(ref_price);
-        sell_tp    = (InpFixedTakeProfitPoints > 0) ? NormalizePrice(sell_price - InpFixedTakeProfitPoints * _Point) : 0;
-
-        if(CheckStopLevel(buy_price, ask) && CheckStopLevel(sell_price, bid))
+        // Place Buy Stop si la tendance est neutre (0) ou haussière (1)
+        if(trend >= 0)
         {
-            if(trade.BuyStop(lot, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Breakout BuyStop"))
-                PrintFormat("CYCLE DEBUT: Buy Stop placé à %.5f (SL: %.5f, TP: %.5f, Lot: %.2f)", buy_price, buy_sl, buy_tp, lot);
-            else
-                PrintFormat("ERREUR: Échec du Buy Stop. Code: %d", trade.ResultRetcode());
+            buy_price  = NormalizePrice(ref_price + distance);
+            buy_sl     = InpUseFixedSLTPMode ? ((InpFixedStopLossPoints > 0) ? NormalizePrice(buy_price - InpFixedStopLossPoints * _Point) : 0) : NormalizePrice(ref_price);
+            buy_tp     = (InpFixedTakeProfitPoints > 0) ? NormalizePrice(buy_price + InpFixedTakeProfitPoints * _Point) : 0;
 
-            if(trade.SellStop(lot, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Breakout SellStop"))
-                PrintFormat("CYCLE DEBUT: Sell Stop placé à %.5f (SL: %.5f, TP: %.5f, Lot: %.2f)", sell_price, sell_sl, sell_tp, lot);
-            else
-                PrintFormat("ERREUR: Échec du Sell Stop. Code: %d", trade.ResultRetcode());
+            if(CheckStopLevel(buy_price, ask))
+            {
+                if(trade.BuyStop(lot, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Breakout BuyStop"))
+                    PrintFormat("CYCLE DEBUT: Buy Stop placé à %.5f (SL: %.5f, TP: %.5f, Lot: %.2f)", buy_price, buy_sl, buy_tp, lot);
+                else
+                    PrintFormat("ERREUR: Échec du Buy Stop. Code: %d", trade.ResultRetcode());
+            }
+        }
+
+        // Place Sell Stop si la tendance est neutre (0) ou baissière (-1)
+        if(trend <= 0)
+        {
+            sell_price = NormalizePrice(ref_price - distance);
+            sell_sl    = InpUseFixedSLTPMode ? ((InpFixedStopLossPoints > 0) ? NormalizePrice(sell_price + InpFixedStopLossPoints * _Point) : 0) : NormalizePrice(ref_price);
+            sell_tp    = (InpFixedTakeProfitPoints > 0) ? NormalizePrice(sell_price - InpFixedTakeProfitPoints * _Point) : 0;
+
+            if(CheckStopLevel(sell_price, bid))
+            {
+                if(trade.SellStop(lot, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Breakout SellStop"))
+                    PrintFormat("CYCLE DEBUT: Sell Stop placé à %.5f (SL: %.5f, TP: %.5f, Lot: %.2f)", sell_price, sell_sl, sell_tp, lot);
+                else
+                    PrintFormat("ERREUR: Échec du Sell Stop. Code: %d", trade.ResultRetcode());
+            }
         }
     }
     // Mode Inversé (Sell Limit au-dessus, Buy Limit en-dessous)
     else if(InpExecutionMode == MODE_INVERTED)
     {
-        sell_price = NormalizePrice(ref_price + distance);
-        sell_sl    = (InpFixedStopLossPoints > 0) ? NormalizePrice(sell_price + InpFixedStopLossPoints * _Point) : 0;
-        sell_tp    = (InpFixedTakeProfitPoints > 0) ? NormalizePrice(sell_price - InpFixedTakeProfitPoints * _Point) : 0;
-
-        buy_price  = NormalizePrice(ref_price - distance);
-        buy_sl     = (InpFixedStopLossPoints > 0) ? NormalizePrice(buy_price - InpFixedStopLossPoints * _Point) : 0;
-        buy_tp     = (InpFixedTakeProfitPoints > 0) ? NormalizePrice(buy_price + InpFixedTakeProfitPoints * _Point) : 0;
-
-        if(CheckStopLevel(sell_price, ask) && CheckStopLevel(buy_price, bid))
+        if(trend >= 0)
         {
-            if(trade.SellLimit(lot, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Inverted SellLimit"))
-                PrintFormat("CYCLE DEBUT: Sell Limit placé à %.5f (SL: %.5f, TP: %.5f, Lot: %.2f)", sell_price, sell_sl, sell_tp, lot);
-            else
-                PrintFormat("ERREUR: Échec du Sell Limit. Code: %d", trade.ResultRetcode());
+            sell_price = NormalizePrice(ref_price + distance);
+            sell_sl    = (InpFixedStopLossPoints > 0) ? NormalizePrice(sell_price + InpFixedStopLossPoints * _Point) : 0;
+            sell_tp    = (InpFixedTakeProfitPoints > 0) ? NormalizePrice(sell_price - InpFixedTakeProfitPoints * _Point) : 0;
 
-            if(trade.BuyLimit(lot, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Inverted BuyLimit"))
-                PrintFormat("CYCLE DEBUT: Buy Limit placé à %.5f (SL: %.5f, TP: %.5f, Lot: %.2f)", buy_price, buy_sl, buy_tp, lot);
-            else
-                PrintFormat("ERREUR: Échec du Buy Limit. Code: %d", trade.ResultRetcode());
+            if(CheckStopLevel(sell_price, ask))
+            {
+                if(trade.SellLimit(lot, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Inverted SellLimit"))
+                    PrintFormat("CYCLE DEBUT: Sell Limit placé à %.5f (SL: %.5f, TP: %.5f, Lot: %.2f)", sell_price, sell_sl, sell_tp, lot);
+                else
+                    PrintFormat("ERREUR: Échec du Sell Limit. Code: %d", trade.ResultRetcode());
+            }
+        }
+
+        if(trend <= 0)
+        {
+            buy_price  = NormalizePrice(ref_price - distance);
+            buy_sl     = (InpFixedStopLossPoints > 0) ? NormalizePrice(buy_price - InpFixedStopLossPoints * _Point) : 0;
+            buy_tp     = (InpFixedTakeProfitPoints > 0) ? NormalizePrice(buy_price + InpFixedTakeProfitPoints * _Point) : 0;
+
+            if(CheckStopLevel(buy_price, bid))
+            {
+                if(trade.BuyLimit(lot, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Inverted BuyLimit"))
+                    PrintFormat("CYCLE DEBUT: Buy Limit placé à %.5f (SL: %.5f, TP: %.5f, Lot: %.2f)", buy_price, buy_sl, buy_tp, lot);
+                else
+                    PrintFormat("ERREUR: Échec du Buy Limit. Code: %d", trade.ResultRetcode());
+            }
         }
     }
     // Mode Achat Uniquement (Buy Stop uniquement)
     else if(InpExecutionMode == MODE_BUY_ONLY)
     {
-        buy_price  = NormalizePrice(ref_price + distance);
-        buy_sl     = InpUseFixedSLTPMode ? ((InpFixedStopLossPoints > 0) ? NormalizePrice(buy_price - InpFixedStopLossPoints * _Point) : 0) : NormalizePrice(ref_price);
-        buy_tp     = (InpFixedTakeProfitPoints > 0) ? NormalizePrice(buy_price + InpFixedTakeProfitPoints * _Point) : 0;
-
-        if(CheckStopLevel(buy_price, ask))
+        if(trend >= 0)
         {
-            if(trade.BuyStop(lot, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Buy Only BuyStop"))
-                PrintFormat("CYCLE DEBUT: Buy Stop (Achat Seul) placé à %.5f (SL: %.5f, TP: %.5f, Lot: %.2f)", buy_price, buy_sl, buy_tp, lot);
-            else
-                PrintFormat("ERREUR: Échec du Buy Stop. Code: %d", trade.ResultRetcode());
+            buy_price  = NormalizePrice(ref_price + distance);
+            buy_sl     = InpUseFixedSLTPMode ? ((InpFixedStopLossPoints > 0) ? NormalizePrice(buy_price - InpFixedStopLossPoints * _Point) : 0) : NormalizePrice(ref_price);
+            buy_tp     = (InpFixedTakeProfitPoints > 0) ? NormalizePrice(buy_price + InpFixedTakeProfitPoints * _Point) : 0;
+
+            if(CheckStopLevel(buy_price, ask))
+            {
+                if(trade.BuyStop(lot, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Buy Only BuyStop"))
+                    PrintFormat("CYCLE DEBUT: Buy Stop (Achat Seul) placé à %.5f (SL: %.5f, TP: %.5f, Lot: %.2f)", buy_price, buy_sl, buy_tp, lot);
+                else
+                    PrintFormat("ERREUR: Échec du Buy Stop. Code: %d", trade.ResultRetcode());
+            }
         }
     }
     // Mode Vente Uniquement (Sell Stop uniquement)
     else if(InpExecutionMode == MODE_SELL_ONLY)
     {
-        sell_price = NormalizePrice(ref_price - distance);
-        sell_sl    = InpUseFixedSLTPMode ? ((InpFixedStopLossPoints > 0) ? NormalizePrice(sell_price + InpFixedStopLossPoints * _Point) : 0) : NormalizePrice(ref_price);
-        sell_tp    = (InpFixedTakeProfitPoints > 0) ? NormalizePrice(sell_price - InpFixedTakeProfitPoints * _Point) : 0;
-
-        if(CheckStopLevel(sell_price, bid))
+        if(trend <= 0)
         {
-            if(trade.SellStop(lot, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Sell Only SellStop"))
-                PrintFormat("CYCLE DEBUT: Sell Stop (Vente Seule) placé à %.5f (SL: %.5f, TP: %.5f, Lot: %.2f)", sell_price, sell_sl, sell_tp, lot);
-            else
-                PrintFormat("ERREUR: Échec du Sell Stop. Code: %d", trade.ResultRetcode());
+            sell_price = NormalizePrice(ref_price - distance);
+            sell_sl    = InpUseFixedSLTPMode ? ((InpFixedStopLossPoints > 0) ? NormalizePrice(sell_price + InpFixedStopLossPoints * _Point) : 0) : NormalizePrice(ref_price);
+            sell_tp    = (InpFixedTakeProfitPoints > 0) ? NormalizePrice(sell_price - InpFixedTakeProfitPoints * _Point) : 0;
+
+            if(CheckStopLevel(sell_price, bid))
+            {
+                if(trade.SellStop(lot, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Sell Only SellStop"))
+                    PrintFormat("CYCLE DEBUT: Sell Stop (Vente Seule) placé à %.5f (SL: %.5f, TP: %.5f, Lot: %.2f)", sell_price, sell_sl, sell_tp, lot);
+                else
+                    PrintFormat("ERREUR: Échec du Sell Stop. Code: %d", trade.ResultRetcode());
+            }
         }
     }
 }
@@ -428,7 +552,7 @@ void PlacePendingOrders()
 //+------------------------------------------------------------------+
 void ManageOpenPosition()
 {
-    // NIVEAU 1 : Si le mode SL/TP fixes uniquement est activé => Désactiver BE, ProfitLock et Trailing
+    // Mode SL/TP fixes uniquement => Désactiver BE, ProfitLock et Trailing
     if(InpUseFixedSLTPMode) return;
 
     for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -449,7 +573,7 @@ void ManageOpenPosition()
 
             double target_sl = current_sl;
 
-            //--- NIVEAU 2 : BREAK EVEN AVEC PROTECTION DE PROFIT
+            //--- BREAK EVEN AVEC PROTECTION DE PROFIT
             if(InpBreakEvenTriggerPoints > 0)
             {
                 if(type == POSITION_TYPE_BUY)
@@ -478,7 +602,7 @@ void ManageOpenPosition()
                 }
             }
 
-            //--- NIVEAU 3 : VERROUILLAGE DES PROFITS (PROFIT LOCK PROGRESSIF)
+            //--- VERROUILLAGE DES PROFITS (PROFIT LOCK PROGRESSIF)
             if(InpUseProfitLock)
             {
                 if(type == POSITION_TYPE_BUY)
@@ -513,7 +637,7 @@ void ManageOpenPosition()
                 }
             }
 
-            //--- NIVEAU 4 : TRAILING STOP AMÉLIORÉ (FIXE OU ATR)
+            //--- TRAILING STOP AMÉLIORÉ (FIXE OU ATR)
             if(InpTrailingStartPoints > 0)
             {
                 double trailing_dist = InpTrailingDistancePoints * _Point;
@@ -553,7 +677,7 @@ void ManageOpenPosition()
                 }
             }
 
-            //--- NIVEAU 5 : VALIDATION ET EMPECHEMENT DE TOUT RECUL DE SL
+            //--- VALIDATION ET EMPECHEMENT DE TOUT RECUL DE SL
             bool is_valid_mod = false;
             double current_check_price = (type == POSITION_TYPE_BUY) ? bid : ask;
 
@@ -593,7 +717,7 @@ void OnTick()
     int open_positions = CountOpenPositions();
     int pending_orders = CountPendingOrders();
 
-    // RÈGLE CRUCIALE DE LA STRATÉGIE: Supprimer tout ordre opposé dès qu'une position est active
+    // Supprimer tout ordre opposé dès qu'une position est active
     if(open_positions > 0 && pending_orders > 0)
     {
         CancelAllPendingOrders();
@@ -618,7 +742,7 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
-//| COMPTAGE DES POSITIONS ET ORDRES EN ATTENTE POUR LE MAGIC NUMBER |
+//| COMPTAGE DES POSITIONS ET ORDRES EN ATTENTE                      |
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
@@ -664,10 +788,6 @@ int CountPendingOrders()
 }
 
 //+------------------------------------------------------------------+
-//| GESTION DU CYCLE DE LIFE & PLACEMENT DES ORDRES                 |
-//+------------------------------------------------------------------+
-
-//+------------------------------------------------------------------+
 //| Calcule le prix de référence : Milieu entre Bid et Ask          |
 //+------------------------------------------------------------------+
 double CalculateReferencePrice()
@@ -678,7 +798,7 @@ double CalculateReferencePrice()
 }
 
 //+------------------------------------------------------------------+
-//| Annule tous les ordres en attente opposés                        |
+//| Annule tous les ordres en attente                                |
 //+------------------------------------------------------------------+
 void CancelAllPendingOrders()
 {
@@ -709,10 +829,8 @@ void CancelAllPendingOrders()
 //+------------------------------------------------------------------+
 void CheckPendingOrdersExpiration()
 {
-    if(InpMaxCandlesPending <= 0) return; // Fonctionnalité désactivée
+    if(InpMaxCandlesPending <= 0) return;
     if(CountPendingOrders() == 0) return;
-
-    datetime current_bar_time = iTime(_Symbol, _Period, 0);
 
     for(int i = OrdersTotal() - 1; i >= 0; i--)
     {
@@ -723,8 +841,6 @@ void CheckPendingOrdersExpiration()
                OrderGetString(ORDER_SYMBOL) == _Symbol)
             {
                 datetime order_setup_time = (datetime)OrderGetInteger(ORDER_TIME_SETUP);
-
-                // Calcul du nombre de barres écoulées depuis le placement
                 int bars_elapsed = iBarShift(_Symbol, _Period, order_setup_time);
 
                 if(bars_elapsed >= InpMaxCandlesPending)
@@ -744,7 +860,7 @@ void CheckPendingOrdersExpiration()
 //+------------------------------------------------------------------+
 bool CheckSpread()
 {
-    if(InpMaxSpreadPoints <= 0) return true; // Désactivé
+    if(InpMaxSpreadPoints <= 0) return true;
 
     long current_spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
     if(current_spread > InpMaxSpreadPoints)
@@ -770,7 +886,7 @@ bool CheckTimeFilter()
     {
         if(dt.hour < InpStartHour || dt.hour >= InpEndHour) return false;
     }
-    else // Plage chevauchant minuit (ex: 22h à 04h)
+    else
     {
         if(dt.hour < InpStartHour && dt.hour >= InpEndHour) return false;
     }
