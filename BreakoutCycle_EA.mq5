@@ -36,7 +36,7 @@ input int                InpDistancePoints        = 250;             // Distance
 input bool               InpUseDynamicDistance    = true;            // Utiliser une distance dynamique basée sur l'ATR
 input double             InpATRDistanceMultiplier = 1.5;             // Multiplicateur ATR pour la distance dynamique
 input ulong              InpSlippage              = 10;              // Slippage maximal autorisé (en Points)
-input int                InpMaxSpreadPoints       = 50;              // Spread maximal autorisé (0 = désactivé)
+input int                InpMaxSpreadPoints       = 150;             // Spread maximal autorisé (0 = désactivé)
 
 //--- Filtre de Tendance
 input group "=== Filtre de Tendance (EMA) ==="
@@ -46,7 +46,7 @@ input ENUM_MA_METHOD     InpMAType                = MODE_EMA;        // Type de 
 
 //--- Gestion du Lot et du Risque
 input group "=== Gestion du Capital & Lot ==="
-input double             InpFixedLotSize          = 0.10;            // Taille de lot fixe
+input double             InpFixedLotSize          = 0.01;            // Taille de lot fixe
 input bool               InpUseAutoLot            = false;           // Activer le calcul de lot automatique (%)
 input double             InpRiskPercent           = 1.0;             // Pourcentage de risque par trade (% Solde)
 
