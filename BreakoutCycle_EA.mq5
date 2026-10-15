@@ -43,12 +43,35 @@ input double             InpRiskPercent           = 1.0;             // Pourcent
 
 //--- Gestion Dynamic SL / BE / Trailing / Fixed SL-TP
 input group "=== Gestion de Position & Protection ==="
-input bool               InpUseFixedSLTPMode      = false;           // Mode SL/TP Fixes uniquement (Désactive BE/Trailing)
+input bool               InpUseFixedSLTPMode      = false;           // Mode SL/TP Fixes uniquement (Désactive BE/ProfitLock/Trailing)
 input int                InpFixedStopLossPoints   = 200;             // Stop Loss Fixe en Points (utilisé en Mode Fixe ou Inversé)
 input int                InpFixedTakeProfitPoints = 300;             // Take Profit Fixe en Points (0 = Aucun Take Profit)
-input int                InpBreakEvenPoints       = 100;             // Profit pour déclencher le Break Even (en Points)
-input int                InpTrailingStartPoints   = 150;             // Profit pour activer le Trailing Stop (en Points)
-input int                InpTrailingDistancePoints= 100;             // Distance du Trailing Stop (en Points)
+
+//--- Break Even avec Protection de Profit
+input group "=== Break Even Amélioré ==="
+input int                InpBreakEvenTriggerPoints= 150;             // Profit requis pour déclencher le Break Even (en Points)
+input int                InpBreakEvenProfitPoints = 30;              // Profit sécurisé au Break Even (en Points)
+
+//--- Profit Lock (Verrouillage Progressif des Gains)
+input group "=== Verrouillage des Profits (Profit Lock) ==="
+input bool               InpUseProfitLock         = false;           // Activer le verrouillage progressif des gains
+input int                InpProfitLockLevel1Points= 500;             // Profit Niveau 1 pour verrouiller (en Points)
+input int                InpProfitLockLock1Points = 200;             // Profit sécurisé Niveau 1 (en Points)
+input int                InpProfitLockLevel2Points= 1000;            // Profit Niveau 2 pour verrouiller (en Points)
+input int                InpProfitLockLock2Points = 500;             // Profit sécurisé Niveau 2 (en Points)
+
+//--- Trailing Stop (Fixe ou ATR)
+input group "=== Trailing Stop Amélioré ==="
+input int                InpTrailingStartPoints   = 200;             // Profit pour activer le Trailing Stop (en Points)
+input int                InpTrailingDistancePoints= 150;             // Distance du Trailing Stop fixe (en Points)
+input bool               InpUseATRTrailing        = false;           // Activer le Trailing Stop dynamique basé sur l'ATR
+input int                InpATRTrailingPeriod     = 14;              // Période de l'ATR Trailing
+input ENUM_TIMEFRAMES    InpATRTrailingTimeframe  = PERIOD_CURRENT;  // Timeframe de l'ATR Trailing
+input double             InpATRTrailingMultiplier = 1.5;             // Multiplicateur ATR pour la distance de trailing
+
+//--- Sécurité Broker & Délai de Modification
+input group "=== Sécurités & Délais Broker ==="
+input int                InpMinSecondsBetweenSLMod= 2;               // Délai minimum entre deux modifications de SL (en secondes)
 
 //--- Expiration du Cycle
 input group "=== Expiration du Cycle ==="
@@ -71,10 +94,12 @@ input int                InpEndHour               = 20;              // Heure de
 //+------------------------------------------------------------------+
 //| Variables Globales                                              |
 //+------------------------------------------------------------------+
-CTrade         trade;                 // Objet d'exécution des transactions
-int            handle_atr = INVALID_HANDLE; // Handle pour l'indicateur ATR
-datetime       cycle_start_time = 0;  // Heure de début du cycle actuel
-bool           is_be_applied = false; // Drapeau indiquant si le Break Even a déjà été appliqué dans le cycle actuel
+CTrade         trade;                       // Objet d'exécution des transactions
+int            handle_atr = INVALID_HANDLE;          // Handle pour le filtre ATR
+int            handle_atr_trailing = INVALID_HANDLE; // Handle pour le Trailing ATR
+datetime       cycle_start_time = 0;        // Heure de début du cycle actuel
+bool           is_be_applied = false;       // Drapeau indiquant si le Break Even a été appliqué
+datetime       last_sl_mod_time = 0;        // Horodatage de la dernière modification du Stop Loss
 
 //+------------------------------------------------------------------+
 //| Configure le type de remplissage (Filling Type) selon le symbole |
@@ -111,6 +136,17 @@ int OnInit()
         }
     }
 
+    // Initialisation de l'ATR Trailing si activé
+    if(InpUseATRTrailing)
+    {
+        handle_atr_trailing = iATR(_Symbol, InpATRTrailingTimeframe, InpATRTrailingPeriod);
+        if(handle_atr_trailing == INVALID_HANDLE)
+        {
+            PrintFormat("ERREUR [OnInit]: Échec de création du handle ATR Trailing pour %s.", _Symbol);
+            return(INIT_FAILED);
+        }
+    }
+
     PrintFormat("INITIALISATION [OnInit]: BreakoutCycle_EA chargé avec succès sur %s (%s). Magic Number: %i",
                 _Symbol, EnumToString(_Period), InpMagic);
 
@@ -122,11 +158,17 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-    // Libération du handle ATR
+    // Libération des handles ATR
     if(handle_atr != INVALID_HANDLE)
     {
         IndicatorRelease(handle_atr);
         handle_atr = INVALID_HANDLE;
+    }
+
+    if(handle_atr_trailing != INVALID_HANDLE)
+    {
+        IndicatorRelease(handle_atr_trailing);
+        handle_atr_trailing = INVALID_HANDLE;
     }
 
     PrintFormat("DÉSINITIALISATION [OnDeinit]: BreakoutCycle_EA déchargé. Raison: %d", reason);
@@ -190,6 +232,50 @@ bool CheckStopLevel(double order_price, double market_price)
                     (int)(MathAbs(order_price - market_price) / _Point), stop_level_points);
         return false;
     }
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Vérifie la validité d'une modification de Stop Loss             |
+//| (Spread, StopLevel, FreezeLevel et Délai minimum entre modifs)   |
+//+------------------------------------------------------------------+
+bool CheckSLModificationValid(double new_sl, double current_price)
+{
+    // 1. Vérification du délai minimum entre deux modifications de SL
+    if(InpMinSecondsBetweenSLMod > 0)
+    {
+        datetime current_time = TimeCurrent();
+        if(last_sl_mod_time > 0 && (current_time - last_sl_mod_time) < InpMinSecondsBetweenSLMod)
+        {
+            return false;
+        }
+    }
+
+    // 2. Vérification du Spread actuel
+    if(!CheckSpread()) return false;
+
+    // 3. Vérification du Stop Level & Freeze Level du broker
+    int stop_level   = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+    int freeze_level = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+
+    double min_stop_dist   = stop_level * _Point;
+    double min_freeze_dist = freeze_level * _Point;
+
+    double dist_to_market = MathAbs(new_sl - current_price);
+
+    if(dist_to_market < min_stop_dist)
+    {
+        PrintFormat("REFUS BROKER [StopLevel]: Nouveau SL (%.5f) trop proche du prix (%.5f). Min requis: %d pts",
+                    new_sl, current_price, stop_level);
+        return false;
+    }
+
+    if(freeze_level > 0 && dist_to_market < min_freeze_dist)
+    {
+        PrintFormat("REFUS BROKER [FreezeLevel]: Ordre gelé par le broker (FreezeLevel = %d pts).", freeze_level);
+        return false;
+    }
+
     return true;
 }
 
@@ -338,11 +424,11 @@ void PlacePendingOrders()
 }
 
 //+------------------------------------------------------------------+
-//| GESTION DYNAMIQUE DE LA POSITION OUVERTE (BE & TRAILING)        |
+//| GESTION DYNAMIQUE DE LA POSITION OUVERTE (BE, PROFIT LOCK & TS) |
 //+------------------------------------------------------------------+
 void ManageOpenPosition()
 {
-    // Si le mode SL/TP fixes uniquement est activé, BE et Trailing sont désactivés
+    // NIVEAU 1 : Si le mode SL/TP fixes uniquement est activé => Désactiver BE, ProfitLock et Trailing
     if(InpUseFixedSLTPMode) return;
 
     for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -361,55 +447,96 @@ void ManageOpenPosition()
             double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
             double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-            //--- 1. GESTION DU BREAK EVEN (Effectué une seule fois par cycle)
-            if(!is_be_applied && InpBreakEvenPoints > 0)
+            double target_sl = current_sl;
+
+            //--- NIVEAU 2 : BREAK EVEN AVEC PROTECTION DE PROFIT
+            if(InpBreakEvenTriggerPoints > 0)
             {
                 if(type == POSITION_TYPE_BUY)
                 {
-                    if(bid >= open_price + InpBreakEvenPoints * _Point)
+                    if(bid >= open_price + InpBreakEvenTriggerPoints * _Point)
                     {
-                        double new_sl = NormalizePrice(open_price);
-                        if(current_sl < new_sl)
+                        double be_sl = NormalizePrice(open_price + InpBreakEvenProfitPoints * _Point);
+                        if(be_sl > target_sl + _Point)
                         {
-                            if(trade.PositionModify(ticket, new_sl, current_tp))
-                            {
-                                is_be_applied = true;
-                                PrintFormat("POSITION #%I64u: Break Even appliqué à %.5f", ticket, new_sl);
-                            }
+                            target_sl = be_sl;
+                            is_be_applied = true;
                         }
                     }
                 }
                 else if(type == POSITION_TYPE_SELL)
                 {
-                    if(ask <= open_price - InpBreakEvenPoints * _Point)
+                    if(ask <= open_price - InpBreakEvenTriggerPoints * _Point)
                     {
-                        double new_sl = NormalizePrice(open_price);
-                        if(current_sl == 0 || current_sl > new_sl)
+                        double be_sl = NormalizePrice(open_price - InpBreakEvenProfitPoints * _Point);
+                        if(target_sl == 0 || be_sl < target_sl - _Point)
                         {
-                            if(trade.PositionModify(ticket, new_sl, current_tp))
-                            {
-                                is_be_applied = true;
-                                PrintFormat("POSITION #%I64u: Break Even appliqué à %.5f", ticket, new_sl);
-                            }
+                            target_sl = be_sl;
+                            is_be_applied = true;
                         }
                     }
                 }
             }
 
-            //--- 2. GESTION DU TRAILING STOP (Progression constante sans jamais reculer)
-            if(InpTrailingStartPoints > 0 && InpTrailingDistancePoints > 0)
+            //--- NIVEAU 3 : VERROUILLAGE DES PROFITS (PROFIT LOCK PROGRESSIF)
+            if(InpUseProfitLock)
             {
+                if(type == POSITION_TYPE_BUY)
+                {
+                    // Profit Lock Level 2
+                    if(InpProfitLockLevel2Points > 0 && bid >= open_price + InpProfitLockLevel2Points * _Point)
+                    {
+                        double lock2_sl = NormalizePrice(open_price + InpProfitLockLock2Points * _Point);
+                        if(lock2_sl > target_sl + _Point) target_sl = lock2_sl;
+                    }
+                    // Profit Lock Level 1
+                    else if(InpProfitLockLevel1Points > 0 && bid >= open_price + InpProfitLockLevel1Points * _Point)
+                    {
+                        double lock1_sl = NormalizePrice(open_price + InpProfitLockLock1Points * _Point);
+                        if(lock1_sl > target_sl + _Point) target_sl = lock1_sl;
+                    }
+                }
+                else if(type == POSITION_TYPE_SELL)
+                {
+                    // Profit Lock Level 2
+                    if(InpProfitLockLevel2Points > 0 && ask <= open_price - InpProfitLockLevel2Points * _Point)
+                    {
+                        double lock2_sl = NormalizePrice(open_price - InpProfitLockLock2Points * _Point);
+                        if(target_sl == 0 || lock2_sl < target_sl - _Point) target_sl = lock2_sl;
+                    }
+                    // Profit Lock Level 1
+                    else if(InpProfitLockLevel1Points > 0 && ask <= open_price - InpProfitLockLevel1Points * _Point)
+                    {
+                        double lock1_sl = NormalizePrice(open_price - InpProfitLockLock1Points * _Point);
+                        if(target_sl == 0 || lock1_sl < target_sl - _Point) target_sl = lock1_sl;
+                    }
+                }
+            }
+
+            //--- NIVEAU 4 : TRAILING STOP AMÉLIORÉ (FIXE OU ATR)
+            if(InpTrailingStartPoints > 0)
+            {
+                double trailing_dist = InpTrailingDistancePoints * _Point;
+
+                // Calcul ATR de la distance si le Trailing ATR est activé
+                if(InpUseATRTrailing && handle_atr_trailing != INVALID_HANDLE)
+                {
+                    double atr_vals[];
+                    ArraySetAsSeries(atr_vals, true);
+                    if(CopyBuffer(handle_atr_trailing, 0, 0, 1, atr_vals) > 0)
+                    {
+                        trailing_dist = atr_vals[0] * InpATRTrailingMultiplier;
+                    }
+                }
+
                 if(type == POSITION_TYPE_BUY)
                 {
                     if(bid >= open_price + InpTrailingStartPoints * _Point)
                     {
-                        double desired_sl = NormalizePrice(bid - InpTrailingDistancePoints * _Point);
-                        if(desired_sl > current_sl + _Point) // S'assure que le SL ne fait qu'avancer
+                        double desired_ts_sl = NormalizePrice(bid - trailing_dist);
+                        if(desired_ts_sl > target_sl + _Point)
                         {
-                            if(trade.PositionModify(ticket, desired_sl, current_tp))
-                            {
-                                PrintFormat("POSITION #%I64u: Trailing Stop mis à jour à %.5f", ticket, desired_sl);
-                            }
+                            target_sl = desired_ts_sl;
                         }
                     }
                 }
@@ -417,15 +544,41 @@ void ManageOpenPosition()
                 {
                     if(ask <= open_price - InpTrailingStartPoints * _Point)
                     {
-                        double desired_sl = NormalizePrice(ask + InpTrailingDistancePoints * _Point);
-                        if(current_sl == 0 || desired_sl < current_sl - _Point) // S'assure que le SL ne fait qu me réculer (avancer en faveur du profit)
+                        double desired_ts_sl = NormalizePrice(ask + trailing_dist);
+                        if(target_sl == 0 || desired_ts_sl < target_sl - _Point)
                         {
-                            if(trade.PositionModify(ticket, desired_sl, current_tp))
-                            {
-                                PrintFormat("POSITION #%I64u: Trailing Stop mis à jour à %.5f", ticket, desired_sl);
-                            }
+                            target_sl = desired_ts_sl;
                         }
                     }
+                }
+            }
+
+            //--- NIVEAU 5 : VALIDATION ET EMPECHEMENT DE TOUT RECUL DE SL
+            bool is_valid_mod = false;
+            double current_check_price = (type == POSITION_TYPE_BUY) ? bid : ask;
+
+            if(type == POSITION_TYPE_BUY && target_sl > current_sl + _Point)
+            {
+                is_valid_mod = CheckSLModificationValid(target_sl, current_check_price);
+            }
+            else if(type == POSITION_TYPE_SELL && (current_sl == 0 || target_sl < current_sl - _Point))
+            {
+                is_valid_mod = CheckSLModificationValid(target_sl, current_check_price);
+            }
+
+            // Application de la modification auprès du broker
+            if(is_valid_mod)
+            {
+                if(trade.PositionModify(ticket, target_sl, current_tp))
+                {
+                    last_sl_mod_time = TimeCurrent();
+                    PrintFormat("POSITION #%I64u: Stop Loss mis à jour à %.5f (Prix actuel: %.5f)",
+                                ticket, target_sl, current_check_price);
+                }
+                else
+                {
+                    PrintFormat("ERREUR MODIFICATION #%I64u: Échec de modif du SL à %.5f. Retcode: %d",
+                                ticket, target_sl, trade.ResultRetcode());
                 }
             }
         }
