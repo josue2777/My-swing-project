@@ -5,17 +5,26 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024, Trading Bot"
 #property link      "https://www.mql5.com"
-#property version   "1.00"
+#property version   "1.10"
 #property strict
 
 #include <Trade\Trade.mqh>
 
+//--- Trade Direction Enumeration
+enum ENUM_TRADE_DIRECTION
+{
+    DIRECTION_BOTH = 0,       // Both Buy Stop and Sell Stop
+    DIRECTION_BUY_ONLY = 1,   // Buy Stop Only
+    DIRECTION_SELL_ONLY = 2   // Sell Stop Only
+};
+
 //--- Input Parameters
-input ulong    InpMagic               = 334455;   // Magic Number
-input double   InpLotSize             = 0.01;     // Lot Size
-input int      InpPendingDistancePoints = 2000;   // Pending Order Distance (Points)
-input int      InpTPDistancePoints    = 3000;     // Take Profit Distance (Points)
-input bool     InpKeepOppositeOrder   = false;    // Keep Opposite Pending Order (Mode 2)
+input ulong                InpMagic                 = 334455;        // Magic Number
+input double               InpLotSize               = 0.01;          // Lot Size
+input int                  InpPendingDistancePoints = 2000;          // Pending Order Distance (Points)
+input int                  InpTPDistancePoints      = 3000;          // Take Profit Distance (Points)
+input bool                 InpKeepOppositeOrder     = false;         // Keep Opposite Pending Order (Mode 2)
+input ENUM_TRADE_DIRECTION InpTradeDirection        = DIRECTION_BOTH; // Trade Direction Mode
 
 //--- Global Variables
 CTrade trade;
@@ -137,7 +146,7 @@ void DeletePendingOrders()
             {
                 if(!trade.OrderDelete(ticket))
                 {
-                    PrintFormat("Failed to delete pending order #%I64u, retcode=%uint", ticket, trade.ResultRetcode());
+                    PrintFormat("Failed to delete pending order #%I64u, retcode=%u", ticket, trade.ResultRetcode());
                 }
             }
         }
@@ -145,7 +154,7 @@ void DeletePendingOrders()
 }
 
 //+------------------------------------------------------------------+
-//| Place Buy Stop and Sell Stop pending orders                      |
+//| Place Buy Stop and/or Sell Stop pending orders                   |
 //+------------------------------------------------------------------+
 void PlaceCycleOrders()
 {
@@ -168,28 +177,34 @@ void PlaceCycleOrders()
     double current_price = NormalizeDouble((ask + bid) / 2.0, _Digits);
 
     // Buy Stop parameters
-    double buy_price = NormalizeDouble(current_price + pendingDistance * _Point, _Digits);
-    double buy_sl    = current_price;
-    double buy_tp    = NormalizeDouble(buy_price + InpTPDistancePoints * _Point, _Digits);
-
-    // Sell Stop parameters
-    double sell_price = NormalizeDouble(current_price - pendingDistance * _Point, _Digits);
-    double sell_sl    = current_price;
-    double sell_tp    = NormalizeDouble(sell_price - InpTPDistancePoints * _Point, _Digits);
-
-    // Execute Buy Stop
-    if(!trade.BuyStop(InpLotSize, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Cycle BuyStop"))
+    if(InpTradeDirection == DIRECTION_BOTH || InpTradeDirection == DIRECTION_BUY_ONLY)
     {
-        PrintFormat("BuyStop order failed, retcode=%uint", trade.ResultRetcode());
-        return;
+        double buy_price = NormalizeDouble(current_price + pendingDistance * _Point, _Digits);
+        double buy_sl    = current_price;
+        double buy_tp    = NormalizeDouble(buy_price + InpTPDistancePoints * _Point, _Digits);
+
+        if(!trade.BuyStop(InpLotSize, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Cycle BuyStop"))
+        {
+            PrintFormat("BuyStop order failed, retcode=%u", trade.ResultRetcode());
+            return;
+        }
     }
 
-    // Execute Sell Stop
-    if(!trade.SellStop(InpLotSize, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Cycle SellStop"))
+    // Sell Stop parameters
+    if(InpTradeDirection == DIRECTION_BOTH || InpTradeDirection == DIRECTION_SELL_ONLY)
     {
-        PrintFormat("SellStop order failed, retcode=%uint", trade.ResultRetcode());
-        // Clean up Buy Stop if Sell Stop fails to maintain cycle integrity
-        DeletePendingOrders();
+        double sell_price = NormalizeDouble(current_price - pendingDistance * _Point, _Digits);
+        double sell_sl    = current_price;
+        double sell_tp    = NormalizeDouble(sell_price - InpTPDistancePoints * _Point, _Digits);
+
+        if(!trade.SellStop(InpLotSize, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Cycle SellStop"))
+        {
+            PrintFormat("SellStop order failed, retcode=%u", trade.ResultRetcode());
+            if(InpTradeDirection == DIRECTION_BOTH)
+            {
+                DeletePendingOrders();
+            }
+        }
     }
 }
 //+------------------------------------------------------------------+
