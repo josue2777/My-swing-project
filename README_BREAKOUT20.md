@@ -1,42 +1,51 @@
-# Breakout20 Expert Advisor (MQL5)
+# Breakout20 Expert Advisor (MQL5) - Version 2.00
 
-Ce bot de trading automatique pour MetaTrader 5 identifie le point le plus haut (High) et le point le plus bas (Low) des **20 dernières bougies** pour placer deux ordres en attente (`Buy Stop` au High et `Sell Stop` au Low).
+Ce bot de trading automatique pour MetaTrader 5 identifie le point le plus haut (High) et le point le plus bas (Low) des **20 dernières bougies** pour placer deux ordres en attente (`Buy Stop` et `Sell Stop`). Il intègre des filtres techniques avancés, un décalage d'ordre dynamique par l'ATR, le Break Even à +1R, un Trailing Stop dynamique et une suspension automatique après pertes consécutives.
 
-## 🚀 Fonctionnement et Logique de Trading
+## 🚀 Améliorations et Fonctionnalités Clés
 
-1. **Identification des Points Haut et Bas** :
-   - À chaque recalcul, l'EA analyse les 20 dernières bougies clôturées (indices 1 à 20).
-   - Il détermine le plus haut sommet (`Highest High`) et le plus bas creux (`Lowest Low`).
+1. **Identification des Points Haut et Bas & Décalage (0.5 × ATR)** :
+   - Analyse des 20 dernières bougies clôturées (indices 1 à 20).
+   - Placement du **Buy Stop** à `High + 0.5 × ATR`.
+   - Placement du **Sell Stop** à `Low - 0.5 × ATR`.
 
-2. **Ordres en Attente** :
-   - Placements simultanés :
-     - **Buy Stop** au niveau du point haut.
-     - **Sell Stop** au niveau du point bas.
-   - **Take Profit (TP)** : Fixé à **3000 points**.
-   - **Stop Loss (SL)** : Fixé à **2000 points**.
+2. **Filtres de Trading Avancés** :
+   - **Filtre Tendance EMA 200** : Achat uniquement si le prix est au-dessus de l'EMA 200, Vente uniquement si en dessous.
+   - **Filtre Mouvement ADX 14** : Les ordres ne sont placés que si l'ADX est supérieur ou égal à 25 ($\text{ADX} \ge 25$).
+   - **Filtre Volatilité ATR 14** : Vérification qu'un niveau de volatilité minimal est respecté.
 
-3. **Gestion du Capital et Risk Management** :
-   - Risque fixe de **3% du capital (solde du compte)** par ordre.
-   - Le volume du lot est calculé dynamiquement selon la formule :
-     $$\text{Lot} = \frac{\text{Capital} \times 0.03}{\text{Distance SL en Ticks} \times \text{Valeur du Tick}}$$
-   - Ajustement automatique selon les règles du courtier (lot minimum, lot maximum, pas de lot).
+3. **Confirmation de Cassure** :
+   - Analyse basée exclusivement sur les bougies clôturées. Pas de faux déclenchements sur simple mèche.
 
-4. **Recalcul et Actualisation des Ordres** :
-   - **Cycle des 10 Nouvelles Bougies** : Si pendant 10 bougies aucun ordre n'est déclenché (touché), les anciens ordres en attente sont annulés, le point haut/bas des 20 dernières bougies est recalculé, et deux nouveaux ordres sont positionnés.
-   - **Fermeture de Position (SL / TP)** : Lorsqu'une position ouverte est clôturée (par SL ou TP), tous les ordres en attente restants sont annulés, un nouveau calcul des 20 dernières bougies est effectué et de nouveaux ordres sont placés.
+4. **Gestion de Position (Break Even & Trailing Stop)** :
+   - **Break Even à +1R** : Dès que le gain de la position atteint le niveau du Stop Loss (+1R / 2000 points), le Stop Loss est déplacé au prix d'entrée.
+   - **Trailing Stop Dynamique (2 × ATR)** : Une fois le Break Even activé, le Stop Loss suit le prix à une distance de `2.0 × ATR`.
+
+5. **Gestion des Pertes Consécutives** :
+   - Compteur de Stop Loss consécutifs.
+   - Après **2 pertes consécutives**, la prise d'ordre est automatiquement **suspendue pendant 10 bougies**, puis reprend automatiquement.
+
+6. **Ordres en Attente & Gestion du Risque** :
+   - Annulation automatique de l'ordre opposé dès qu'un ordre est déclenché.
+   - Calcul dynamique du lot basé sur **3% du capital** par trade.
+   - Recalcul des ordres toutes les **10 bougies** si aucun ordre n'est touché ou après chaque fermeture de position.
 
 ## ⚙️ Paramètres (Inputs)
 
-- `InpMagic` : Numéro magique unique identifiant les ordres de l'EA (Défaut : `334455`).
-- `InpLookbackBars` : Nombre de bougies pour le calcul du High/Low (Défaut : `20`).
-- `InpRecalcBars` : Nombre de nouvelles bougies avant recalcul si les ordres ne sont pas touchés (Défaut : `10`).
+- `InpMagic` : Numéro magique de l'EA (Défaut : `334455`).
+- `InpLookbackBars` : Bougies pour le calcul du High/Low (Défaut : `20`).
+- `InpRecalcBars` : Bougies sans déclenchement avant recalcul (Défaut : `10`).
 - `InpStopLossPoints` : Stop Loss en points (Défaut : `2000`).
 - `InpTakeProfitPoints` : Take Profit en points (Défaut : `3000`).
-- `InpRiskPercent` : Pourcentage de risque par trade basé sur le solde du compte (Défaut : `3.0` %).
+- `InpRiskPercent` : Pourcentage de risque par trade (Défaut : `3.0` %).
+- `InpUseEMA` / `InpEMAPeriod` : Activation et période du filtre EMA (Défaut : `200`).
+- `InpUseADX` / `InpADXPeriod` / `InpADXMinLevel` : Activation et seuil de l'ADX (Défaut : `14`, seuil `25.0`).
+- `InpUseATR` / `InpATRPeriod` / `InpATROffsetMult` : Filtre et décalage ATR (Défaut : `0.5` × ATR).
+- `InpUseBreakEven` / `InpUseTrailingStop` / `InpTrailingATRMult` : Break Even +1R et Trailing Stop (`2.0` × ATR).
+- `InpMaxLosses` / `InpPauseBars` : Pause de 10 bougies après 2 pertes consécutives.
 
 ## 🛠 Installation
 
-1. Copiez le fichier `Breakout20_EA.mq5` dans le dossier `MQL5/Experts` de votre plateforme MetaTrader 5.
-2. Compilez le fichier dans MetaEditor (F7).
-3. Attachez l'Expert Advisor sur le graphique de votre choix.
-4. Assurez-vous que l'option **"Trading Algorithmique"** est activée dans MetaTrader 5.
+1. Copiez le fichier `Breakout20_EA.mq5` dans votre dossier `MQL5/Experts` de MetaTrader 5.
+2. Compilez dans MetaEditor (F7).
+3. Attachez l'EA au graphique de votre choix.
