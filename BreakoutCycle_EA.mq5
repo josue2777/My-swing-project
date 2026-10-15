@@ -77,6 +77,20 @@ datetime       cycle_start_time = 0;  // Heure de début du cycle actuel
 bool           is_be_applied = false; // Drapeau indiquant si le Break Even a déjà été appliqué dans le cycle actuel
 
 //+------------------------------------------------------------------+
+//| Configure le type de remplissage (Filling Type) selon le symbole |
+//+------------------------------------------------------------------+
+void SetTradeFillingType()
+{
+    uint filling = (uint)SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE);
+    if((filling & SYMBOL_FILLING_FOK) != 0)
+        trade.SetTypeFilling(ORDER_FILLING_FOK);
+    else if((filling & SYMBOL_FILLING_IOC) != 0)
+        trade.SetTypeFilling(ORDER_FILLING_IOC);
+    else
+        trade.SetTypeFilling(ORDER_FILLING_RETURN);
+}
+
+//+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
@@ -84,7 +98,7 @@ int OnInit()
     // Configuration de l'objet CTrade
     trade.SetExpertMagicNumber(InpMagic);
     trade.SetDeviationInPoints(InpSlippage);
-    trade.SetTypeFillingByOrderSymbol(_Symbol);
+    SetTradeFillingType();
 
     // Initialisation du filtre ATR si activé
     if(InpUseATRFilter)
