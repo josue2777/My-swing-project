@@ -45,18 +45,21 @@ void OnTick()
     int positionsCount = GetPositionsCount();
     int ordersCount = GetOrdersCount();
 
-    // Mode 1: Delete opposite pending order as soon as a position opens
+    // Mode 1 (InpKeepOppositeOrder = false):
+    // Delete opposite pending order as soon as one position is triggered.
     if(!InpKeepOppositeOrder && positionsCount > 0 && ordersCount > 0)
     {
         DeletePendingOrders();
-        ordersCount = 0;
+        ordersCount = GetOrdersCount();
     }
 
-    // Mode 2: Clean up leftover pending orders when all positions are closed
+    // Mode 2 (InpKeepOppositeOrder = true):
+    // If a trade was closed (SL or TP) and we have no active positions left,
+    // clean up any remaining pending orders before starting a new cycle.
     if(InpKeepOppositeOrder && positionsCount == 0 && ordersCount > 0)
     {
         DeletePendingOrders();
-        ordersCount = 0;
+        ordersCount = GetOrdersCount();
     }
 
     // Start a new cycle when no open positions and no pending orders exist
@@ -132,7 +135,10 @@ void DeletePendingOrders()
         {
             if(OrderGetInteger(ORDER_MAGIC) == InpMagic && OrderGetString(ORDER_SYMBOL) == _Symbol)
             {
-                trade.OrderDelete(ticket);
+                if(!trade.OrderDelete(ticket))
+                {
+                    PrintFormat("Failed to delete pending order #%I64u, retcode=%uint", ticket, trade.ResultRetcode());
+                }
             }
         }
     }
@@ -149,21 +155,41 @@ void PlaceCycleOrders()
     if(ask <= 0 || bid <= 0)
         return;
 
+    // Validate broker stops level distance
+    long stopsLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+    int pendingDistance = InpPendingDistancePoints;
+    if(stopsLevel > 0 && pendingDistance < stopsLevel)
+    {
+        pendingDistance = (int)stopsLevel;
+        PrintFormat("Adjusting pending distance to broker minimum stops level: %d points", pendingDistance);
+    }
+
     // Calculate current reference price
     double current_price = NormalizeDouble((ask + bid) / 2.0, _Digits);
 
     // Buy Stop parameters
-    double buy_price = NormalizeDouble(current_price + InpPendingDistancePoints * _Point, _Digits);
+    double buy_price = NormalizeDouble(current_price + pendingDistance * _Point, _Digits);
     double buy_sl    = current_price;
     double buy_tp    = NormalizeDouble(buy_price + InpTPDistancePoints * _Point, _Digits);
 
     // Sell Stop parameters
-    double sell_price = NormalizeDouble(current_price - InpPendingDistancePoints * _Point, _Digits);
+    double sell_price = NormalizeDouble(current_price - pendingDistance * _Point, _Digits);
     double sell_sl    = current_price;
     double sell_tp    = NormalizeDouble(sell_price - InpTPDistancePoints * _Point, _Digits);
 
-    // Execute order requests
-    trade.BuyStop(InpLotSize, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Cycle BuyStop");
-    trade.SellStop(InpLotSize, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Cycle SellStop");
+    // Execute Buy Stop
+    if(!trade.BuyStop(InpLotSize, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Cycle BuyStop"))
+    {
+        PrintFormat("BuyStop order failed, retcode=%uint", trade.ResultRetcode());
+        return;
+    }
+
+    // Execute Sell Stop
+    if(!trade.SellStop(InpLotSize, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Cycle SellStop"))
+    {
+        PrintFormat("SellStop order failed, retcode=%uint", trade.ResultRetcode());
+        // Clean up Buy Stop if Sell Stop fails to maintain cycle integrity
+        DeletePendingOrders();
+    }
 }
 //+------------------------------------------------------------------+
