@@ -19,6 +19,7 @@ enum ENUM_TRADE_DIRECTION
 };
 
 //--- Inputs
+input group "=== Parametres Generaux ==="
 input double               InpLotSize               = 0.01;            // Taille des lots
 input int                  InpPendingDistancePoints = 3000;            // Distance des ordres en attente (points)
 input int                  InpSLDistancePoints      = 2000;            // Distance du Stop loss (points)
@@ -38,6 +39,9 @@ int OnInit()
    trade.SetExpertMagicNumber(InpMagic);
    ConfigureFillingMode();
    g_position_was_opened = false;
+
+   PrintFormat("[INIT] CycleTrading_EA initialise avec succes sur %s. Magic: %I64u | Mode 2: %s | Direction: %d",
+               _Symbol, InpMagic, InpKeepOppositeOrder ? "TRUE" : "FALSE", (int)InpTradeDirection);
    return(INIT_SUCCEEDED);
 }
 
@@ -46,6 +50,7 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   PrintFormat("[DEINIT] EA arrete. Raison: %d", reason);
 }
 
 //+------------------------------------------------------------------+
@@ -56,20 +61,20 @@ void OnTick()
    int active_positions = CountActivePositions();
    int pending_orders   = CountPendingOrders();
 
-   // Track if a position has opened during the current cycle
+   // Suivre si une position a ete ouverte pendant le cycle en cours
    if(active_positions > 0)
    {
       g_position_was_opened = true;
    }
 
-   // Mode 1: Delete opposite pending order immediately when a position opens
+   // Mode 1: Supprimer l'ordre oppose des qu'une position s'ouvre
    if(!InpKeepOppositeOrder && active_positions > 0 && pending_orders > 0)
    {
       DeleteAllPendingOrders();
       pending_orders = CountPendingOrders();
    }
 
-   // Mode 2: When position was opened and is now closed, delete any remaining pending orders
+   // Mode 2: Quand une position etait ouverte et est maintenant fermee, supprimer l'ordre restant
    if(InpKeepOppositeOrder && g_position_was_opened && active_positions == 0 && pending_orders > 0)
    {
       DeleteAllPendingOrders();
@@ -77,7 +82,7 @@ void OnTick()
       g_position_was_opened = false;
    }
 
-   // If no active position and no pending orders, start a new cycle
+   // Lancer un nouveau cycle si aucune position active et aucun ordre en attente
    if(active_positions == 0 && pending_orders == 0)
    {
       g_position_was_opened = false;
@@ -86,7 +91,7 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
-//| Configure dynamic order filling mode                             |
+//| Configurer le mode de remplissage des ordres                   |
 //+------------------------------------------------------------------+
 void ConfigureFillingMode()
 {
@@ -100,7 +105,25 @@ void ConfigureFillingMode()
 }
 
 //+------------------------------------------------------------------+
-//| Count active positions for this EA symbol & magic number         |
+//| Normaliser le lot selon les specifications du courtier           |
+//+------------------------------------------------------------------+
+double NormalizeLot(double lot)
+{
+   double min_lot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double max_lot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double step_lot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+
+   if(step_lot <= 0) step_lot = 0.01;
+
+   lot = MathFloor(lot / step_lot) * step_lot;
+   if(lot < min_lot) lot = min_lot;
+   if(lot > max_lot) lot = max_lot;
+
+   return NormalizeDouble(lot, 2);
+}
+
+//+------------------------------------------------------------------+
+//| Compter les positions actives pour ce symbole et magic number    |
 //+------------------------------------------------------------------+
 int CountActivePositions()
 {
@@ -118,7 +141,7 @@ int CountActivePositions()
 }
 
 //+------------------------------------------------------------------+
-//| Count pending orders for this EA symbol & magic number          |
+//| Compter les ordres en attente pour ce symbole et magic number    |
 //+------------------------------------------------------------------+
 int CountPendingOrders()
 {
@@ -136,7 +159,7 @@ int CountPendingOrders()
 }
 
 //+------------------------------------------------------------------+
-//| Delete all pending orders for this EA symbol & magic number      |
+//| Supprimer tous les ordres en attente                             |
 //+------------------------------------------------------------------+
 void DeleteAllPendingOrders()
 {
@@ -147,14 +170,21 @@ void DeleteAllPendingOrders()
       {
          if(OrderGetInteger(ORDER_MAGIC) == InpMagic && OrderGetString(ORDER_SYMBOL) == _Symbol)
          {
-            trade.OrderDelete(ticket);
+            if(!trade.OrderDelete(ticket))
+            {
+               PrintFormat("[ERREUR] Echec suppression ordre #%I64u. Code: %u", ticket, trade.ResultRetcode());
+            }
+            else
+            {
+               PrintFormat("[INFO] Ordre en attente #%I64u supprime avec succes.", ticket);
+            }
          }
       }
    }
 }
 
 //+------------------------------------------------------------------+
-//| Start a new cycle: calculate reference price and place orders    |
+//| Demarrer un nouveau cycle                                        |
 //+------------------------------------------------------------------+
 void StartNewCycle()
 {
@@ -162,30 +192,54 @@ void StartNewCycle()
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
    if(ask <= 0 || bid <= 0)
-      return;
-
-   // 1. Reference price = (Ask + Bid) / 2
-   double ref_price = NormalizeDouble((ask + bid) / 2.0, _Digits);
-   double point_size = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-
-   // Place Buy Limit Order if allowed
-   if(InpTradeDirection == DIRECTION_BOTH || InpTradeDirection == DIRECTION_BUY_ONLY)
    {
-      double buy_price = NormalizeDouble(ref_price - InpPendingDistancePoints * point_size, _Digits);
-      double buy_sl    = NormalizeDouble(buy_price - InpSLDistancePoints * point_size, _Digits);
-      double buy_tp    = ref_price; // TP at initial reference price
-
-      trade.BuyLimit(InpLotSize, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Cycle Trading Buy Limit");
+      Print("[ERREUR] Impossible de recuperer Ask/Bid valides.");
+      return;
    }
 
-   // Place Sell Limit Order if allowed
+   // 1. Calcul du Prix Actuel de reference = (Ask + Bid) / 2
+   double ref_price  = NormalizeDouble((ask + bid) / 2.0, _Digits);
+   double point_size = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double trade_lot  = NormalizeLot(InpLotSize);
+
+   // Validation de la distance minimale par rapport au StopLevel du courtier
+   long stop_level = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   int min_distance = (int)MathMax(InpPendingDistancePoints, stop_level);
+
+   PrintFormat("[CYCLE START] Nouveau cycle demarre. Prix ref: %.*f | Lot: %.2f", _Digits, ref_price, trade_lot);
+
+   // Placer Ordre Buy Limit
+   if(InpTradeDirection == DIRECTION_BOTH || InpTradeDirection == DIRECTION_BUY_ONLY)
+   {
+      double buy_price = NormalizeDouble(ref_price - min_distance * point_size, _Digits);
+      double buy_sl    = NormalizeDouble(buy_price - InpSLDistancePoints * point_size, _Digits);
+      double buy_tp    = ref_price; // TP au prix actuel de reference initial
+
+      if(trade.BuyLimit(trade_lot, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Cycle Trading Buy Limit"))
+      {
+         PrintFormat("[ORDER OK] Buy Limit place a %.*f | SL: %.*f | TP: %.*f", _Digits, buy_price, _Digits, buy_sl, _Digits, buy_tp);
+      }
+      else
+      {
+         PrintFormat("[ORDER ERROR] Echec placement Buy Limit. Retcode: %u", trade.ResultRetcode());
+      }
+   }
+
+   // Placer Ordre Sell Limit
    if(InpTradeDirection == DIRECTION_BOTH || InpTradeDirection == DIRECTION_SELL_ONLY)
    {
-      double sell_price = NormalizeDouble(ref_price + InpPendingDistancePoints * point_size, _Digits);
+      double sell_price = NormalizeDouble(ref_price + min_distance * point_size, _Digits);
       double sell_sl    = NormalizeDouble(sell_price + InpSLDistancePoints * point_size, _Digits);
-      double sell_tp    = ref_price; // TP at initial reference price
+      double sell_tp    = ref_price; // TP au prix actuel de reference initial
 
-      trade.SellLimit(InpLotSize, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Cycle Trading Sell Limit");
+      if(trade.SellLimit(trade_lot, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Cycle Trading Sell Limit"))
+      {
+         PrintFormat("[ORDER OK] Sell Limit place a %.*f | SL: %.*f | TP: %.*f", _Digits, sell_price, _Digits, sell_sl, _Digits, sell_tp);
+      }
+      else
+      {
+         PrintFormat("[ORDER ERROR] Echec placement Sell Limit. Retcode: %u", trade.ResultRetcode());
+      }
    }
 }
 //+------------------------------------------------------------------+
