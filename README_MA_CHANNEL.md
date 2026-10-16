@@ -1,62 +1,75 @@
-# MA Channel Scalper EA (MQL5)
+# Expert Advisor : Scalper Canal de Moyennes Mobiles (`MAChannel_Scalper_EA`)
 
-Expert Advisor de scalping automatique pour MetaTrader 5 basé sur une stratégie de canal de moyennes mobiles (MA Channel) spécialement conçue pour **XAUUSD M1**.
+## Description
+L'Expert Advisor **`MAChannel_Scalper_EA.mq5`** implémente une stratégie de scalping M1 (principalement conçue pour **XAUUSD** / Or) basée sur un canal formé par deux moyennes mobiles (MA High et MA Low).
 
----
-
-## 📌 Logique et Principe de la Stratégie
-
-Le robot crée un canal dynamique à partir de deux moyennes mobiles (MA Supérieure appliquée aux prix Hauts / High et MA Inférieure appliquée aux prix Bas / Low). La stratégie analyse conjointement :
-1. **Le comportement du prix par rapport au canal**
-2. **L'orientation/pente des deux moyennes mobiles**
-
-### 1. Conditions d'Achat (Long)
-- **Signal** : Une bougie de 1 minute (M1) touche la limite inférieure du canal (`Low <= Lower MA`) et clôture au-dessus de la limite supérieure du canal (`Close > Upper MA`).
-- **Filtre de Tendance** : Les deux moyennes mobiles formant le canal doivent être orientées à la hausse (`Upper MA1 > Upper MA2` et `Lower MA1 > Lower MA2`).
-- **Exécution / Entrée** : L'entrée s'effectue dès que le prix franchit le plus haut (`High`) de cette bougie de signal (via ordre suspendu `Buy Stop` ou cassure au marché).
-- **Stop Loss** : Placé au plus bas (`Low`) de la bougie de signal.
-- **Règle d'Invalidation** : Le signal/ordre est annulé si le prix franchit le plus bas de la bougie de signal avant l'activation.
-
-### 2. Conditions de Vente (Short)
-- **Signal** : Une bougie de 1 minute (M1) touche la limite supérieure du canal (`High >= Upper MA`) et clôture en-dessous de la limite inférieure du canal (`Close < Lower MA`).
-- **Filtre de Tendance** : Les deux moyennes mobiles formant le canal doivent être orientées à la baisse (`Upper MA1 < Upper MA2` et `Lower MA1 < Lower MA2`).
-- **Exécution / Entrée** : L'entrée s'effectue dès que le prix franchit le plus bas (`Low`) de cette bougie de signal (via ordre suspendu `Sell Stop` ou cassure au marché).
-- **Stop Loss** : Placé au plus haut (`High`) de la bougie de signal.
-- **Règle d'Invalidation** : Le signal/ordre est annulé si le prix franchit le plus haut de la bougie de signal avant l'activation.
-
-### 3. Take Profit & Gestion des Sorties
-- **Take Profit (TP)** : Fixé à une distance équivalente à **2 à 3 fois la largeur du canal** (`Upper MA - Lower MA`).
-- **Trailing Stop** : Trailing Stop dynamique basé sur des fractions/multiplicateurs de la largeur du canal.
+La stratégie exploite la dynamique d'une bougie englobant ou traversant entièrement le canal pour capturer le déclenchement de la tendance et entrer sur la cassure du plus haut / plus bas de cette bougie de signal.
 
 ---
 
-## ⚙️ Paramètres d'Entrée (Inputs)
+## Logique de la Stratégie
 
-### Canal de Moyennes Mobiles
-- `InpUpperMAPeriod` (Défaut : 20) : Période de la MA supérieure.
-- `InpUpperMAMethod` (Défaut : EMA) : Méthode de la MA supérieure.
-- `InpUpperMAPrice` (Défaut : PRICE_HIGH) : Prix appliqué à la MA supérieure.
-- `InpLowerMAPeriod` (Défaut : 20) : Période de la MA inférieure.
-- `InpLowerMAMethod` (Défaut : EMA) : Méthode de la MA inférieure.
-- `InpLowerMAPrice` (Défaut : PRICE_LOW) : Prix appliqué à la MA inférieure.
+### 1. Canal de Moyennes Mobiles
+* **Moyenne Mobile Supérieure** : EMA 20 appliquée sur les `HIGH` (Haut de bougie).
+* **Moyenne Mobile Inférieure** : EMA 20 appliquée sur les `LOW` (Bas de bougie).
+* **Largeur du canal** = $|MA_{Upper} - MA_{Lower}|$.
 
-### Exécution & Gestion
-- `InpEntryMode` (Défaut : ENTRY_MODE_PENDING_STOP) : Ordres `Buy Stop / Sell Stop` ou exécution au marché sur cassure.
-- `InpChannelTPMult` (Défaut : 2.5) : Multiplicateur du TP en nombre de largeurs de canal (ex: 2.5 x largeur du canal).
-- `InpBreakoutBuffer` (Défaut : 10.0 points) : Buffer de sécurité au-dessus/en-dessous du High/Low pour l'entrée.
-- `InpUseTrailingStop` (Défaut : true) : Active le suivi de tendance adaptatif.
-- `InpTrailingStep` (Défaut : 0.5) : Pas du Trailing Stop (en fraction de largeur de canal).
+### 2. Signal d'Achat (BUY)
+Une bougie complète (index 1) déclenche un signal d'Achat si :
+1. **Low $\le$ MA Inférieure** (La bougie touche ou traverse la limite inférieure du canal).
+2. **Close $>$ MA Supérieure** (La bougie clôture au-dessus de la limite supérieure du canal).
+3. **Pente des MAs** : Les deux moyennes mobiles doivent être orientées à la hausse ($MA1 > MA2$). *(Note : Ce filtre peut être désactivé via le paramètre `InpRequireMASlope`)*.
 
-### Gestion des Risques
-- `InpMagicNumber` (Défaut : 555888) : Identifiant unique de l'EA.
-- `InpFixedLot` (Défaut : 0.01) : Taille de lot fixe si AutoLot est désactivé.
-- `InpUseAutoLot` (Défaut : true) : Calcul automatique de la taille de lot basé sur le risque.
-- `InpRiskPercent` (Défaut : 1.0%) : Pourcentage du capital risqué par position.
+**Entrée** :
+* Ordre suspendu `Buy Stop` placé au `High` de la bougie de signal + `InpBreakoutBuffer`.
+* **Stop Loss (SL)** : Placé au `Low` de la bougie de signal.
+* **Take Profit (TP)** : Placé à $2.5 \times \text{Largeur du canal}$.
+
+### 3. Signal de Vente (SELL)
+Une bougie complète (index 1) déclenche un signal de Vente si :
+1. **High $\ge$ MA Supérieure** (La bougie touche ou traverse la limite supérieure du canal).
+2. **Close $<$ MA Inférieure** (La bougie clôture en dessous de la limite inférieure du canal).
+3. **Pente des MAs** : Les deux moyennes mobiles doivent être orientées à la baisse ($MA1 < MA2$). *(Optionnel selon `InpRequireMASlope`)*.
+
+**Entrée** :
+* Ordre suspendu `Sell Stop` placé au `Low` de la bougie de signal - `InpBreakoutBuffer`.
+* **Stop Loss (SL)** : Placé au `High` de la bougie de signal.
+* **Take Profit (TP)** : Placé à $2.5 \times \text{Largeur du canal}$.
+
+### 4. Règle d'Invalidation Strict du Signal
+* **Achat** : Si le prix franchit vers le bas le `Low` de la bougie de signal avant le déclenchement de l'ordre d'achat, le signal et l'ordre suspendu sont immédiatement annulés.
+* **Vente** : Si le prix franchit vers le haut le `High` de la bougie de signal avant le déclenchement de l'ordre de vente, le signal et l'ordre suspendu sont immédiatement annulés.
 
 ---
 
-## 🛠️ Configuration & Backtest Recommandés
-1. **Actif** : XAUUSD (Gold).
-2. **Timeframe** : M1 (1 minute).
-3. **Type de Compte** : ECN / RAW Spread (faibles spreads recommandés pour le scalping M1).
-4. **Exécution** : Activez l'option "Trading Algorithmique" sur MetaTrader 5.
+## Paramètres d'Entrée (`Inputs`)
+
+| Paramètre | Type | Valeur par défaut | Description |
+| :--- | :--- | :--- | :--- |
+| `InpUpperMAPeriod` | `int` | `20` | Période de la MA Supérieure |
+| `InpUpperMAMethod` | `ENUM_MA_METHOD` | `MODE_EMA` | Méthode (EMA, SMA, etc.) |
+| `InpUpperMAPrice` | `ENUM_APPLIED_PRICE` | `PRICE_HIGH` | Prix appliqué à la MA Supérieure |
+| `InpLowerMAPeriod` | `int` | `20` | Période de la MA Inférieure |
+| `InpLowerMAMethod` | `ENUM_MA_METHOD` | `MODE_EMA` | Méthode (EMA, SMA, etc.) |
+| `InpLowerMAPrice` | `ENUM_APPLIED_PRICE` | `PRICE_LOW` | Prix appliqué à la MA Inférieure |
+| `InpRequireMASlope`| `bool` | `true` | Exiger l'orientation (pente) des MAs |
+| `InpEntryMode` | `ENUM_ENTRY_MODE` | `ENTRY_MODE_PENDING_STOP` | `ENTRY_MODE_PENDING_STOP` ou `ENTRY_MODE_MARKET_BREAKOUT` |
+| `InpChannelTPMult` | `double` | `2.5` | Multiplicateur TP en largeurs de canal |
+| `InpBreakoutBuffer` | `double` | `10.0` | Buffer de cassure en points |
+| `InpUseTrailingStop`| `bool` | `true` | Activer le Trailing Stop dynamique |
+| `InpTrailingStep` | `double` | `0.5` | Distance du Trailing Stop en fraction de canal |
+| `InpMinModStep` | `double` | `20.0` | Seuil minimum de modification SL en points (évite les erreurs `failed modify`) |
+| `InpMagicNumber` | `ulong` | `555888` | Magic Number unique du bot |
+| `InpFixedLot` | `double` | `0.01` | Taille de lot fixe |
+| `InpUseAutoLot` | `bool` | `true` | Auto-calcul de la taille de lot par risque |
+| `InpRiskPercent` | `double` | `1.0` | Pourcentage du solde risqué par trade |
+
+---
+
+## Remarques Techniques & Conformité Courtier
+
+1. **Gestion des Niveaux de Stop (`SYMBOL_TRADE_STOPS_LEVEL`)** :
+   Le bot intègre une vérification automatique des contraintes de distance minimale imposable par le courtier (`StopsLevel`). Si la distance entre le cours actuel et le Stop Loss / Take Profit ou le prix d'entrée d'un ordre suspendu est inférieure au niveau de stop du courtier, le prix est automatiquement ajusté au niveau autorisé afin d'éviter tout rejet d'ordre ou erreur `failed modify`.
+
+2. **Ajustement de la Pente des Moyennes Mobiles (`InpRequireMASlope`)** :
+   Si vous trouvez que les signaux sont trop rares en backtest sur certaines paires ou périodes très peu volatiles, vous pouvez passer `InpRequireMASlope` à `false`. Cela autorisera les entrées dès qu'une bougie traverse le canal du bas vers le haut (Achat) ou du haut vers le bas (Vente).

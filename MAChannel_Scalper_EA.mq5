@@ -5,19 +5,19 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024, Trading Bot"
 #property link      "https://www.mql5.com"
-#property version   "1.00"
-#property description "EA de Scalping M1 XAUUSD base sur un Canal de Moyennes Mobiles"
-#property description "Conditions d'Achat : Bar touching Lower MA & Close > Upper MA + MAs orientees a la hausse. Entree sur cassure du High de la bar."
-#property description "Conditions de Vente : Bar touching Upper MA & Close < Lower MA + MAs orientees a la baisse. Entree sur cassure du Low de la bar."
-#property description "SL au plus bas/haut de la bar de signal. TP a 2-3 largeurs de canal."
+#property version   "1.10"
+#property description "EA de Scalping M1 XAUUSD basé sur un Canal de Moyennes Mobiles"
+#property description "Conditions d'Achat : Bar touching Lower MA & Close > Upper MA + MAs orientées à la hausse. Entrée sur cassure du High de la bar."
+#property description "Conditions de Vente : Bar touching Upper MA & Close < Lower MA + MAs orientées à la baisse. Entrée sur cassure du Low de la bar."
+#property description "SL au plus bas/haut de la bar de signal. TP à 2-3 largeurs de canal."
 
 #include <Trade\Trade.mqh>
 
 //--- Enums
 enum ENUM_ENTRY_MODE
 {
-   ENTRY_MODE_PENDING_STOP, // Ordres Suspendus (Buy Stop / Sell Stop)
-   ENTRY_MODE_MARKET_BREAKOUT // Execution au Marché à la Cassure
+   ENTRY_MODE_PENDING_STOP,    // Ordres Suspendus (Buy Stop / Sell Stop)
+   ENTRY_MODE_MARKET_BREAKOUT  // Exécution au Marché à la Cassure
 };
 
 //--- Inputs
@@ -28,13 +28,15 @@ input ENUM_APPLIED_PRICE   InpUpperMAPrice    = PRICE_HIGH;     // Prix Appliqu�
 input int                  InpLowerMAPeriod   = 20;             // Période MA Inférieure / Low
 input ENUM_MA_METHOD       InpLowerMAMethod   = MODE_EMA;       // Méthode MA Inférieure
 input ENUM_APPLIED_PRICE   InpLowerMAPrice    = PRICE_LOW;      // Prix Appliqué MA Inférieure
+input bool                 InpRequireMASlope  = true;           // Exiger l'orientation (pente) des MAs
 
-input group "=== Execution & Gestion des Ordres ==="
+input group "=== Exécution & Gestion des Ordres ==="
 input ENUM_ENTRY_MODE      InpEntryMode       = ENTRY_MODE_PENDING_STOP; // Mode d'Entrée
 input double               InpChannelTPMult   = 2.5;            // Multiplicateur TP (Largeurs de Canal 2.0 - 3.0)
 input double               InpBreakoutBuffer  = 10.0;           // Buffer de Cassure en Points
 input bool                 InpUseTrailingStop = true;           // Activer le Trailing Stop
 input double               InpTrailingStep    = 0.5;            // Trailing Stop (en Multiplicateur de Canal)
+input double               InpMinModStep      = 20.0;           // Seuil Min. de modification du SL (en Points)
 
 input group "=== Gestion des Risques ==="
 input ulong                InpMagicNumber     = 555888;         // Magic Number
@@ -140,8 +142,6 @@ void CheckSignalConditions()
    if(CopyBuffer(handle_lower_ma, 0, 1, 3, lower_ma) < 3) return;
    if(CopyRates(_Symbol, _Period, 1, 3, rates) < 3) return;
 
-   // Index 0 in copied buffers corresponds to bar 1 (completed bar)
-   // Index 1 corresponds to bar 2
    double close1     = rates[0].close;
    double high1      = rates[0].high;
    double low1       = rates[0].low;
@@ -159,8 +159,8 @@ void CheckSignalConditions()
    bool is_upper_ma_down = (upper_ma1 < upper_ma2);
    bool is_lower_ma_down = (lower_ma1 < lower_ma2);
 
-   bool all_mas_up   = (is_upper_ma_up && is_lower_ma_up);
-   bool all_mas_down = (is_upper_ma_down && is_lower_ma_down);
+   bool all_mas_up   = (!InpRequireMASlope) || (is_upper_ma_up && is_lower_ma_up);
+   bool all_mas_down = (!InpRequireMASlope) || (is_upper_ma_down && is_lower_ma_down);
 
    double channel_width = MathAbs(upper_ma1 - lower_ma1);
    if(channel_width <= 0) return;
@@ -168,10 +168,9 @@ void CheckSignalConditions()
    // BUY Signal Condition:
    // 1. Touches lower channel (Low <= Lower MA)
    // 2. Closes above upper channel (Close > Upper MA)
-   // 3. Both MAs pointing upwards
+   // 3. Both MAs pointing upwards (if slope check enabled)
    if(low1 <= lower_ma1 && close1 > upper_ma1 && all_mas_up)
    {
-      // Cancel previous opposite pending orders or outdated signals
       CancelPendingOrders();
 
       active_signal.valid = true;
@@ -192,7 +191,7 @@ void CheckSignalConditions()
    // SELL Signal Condition:
    // 1. Touches upper channel (High >= Upper MA)
    // 2. Closes below lower channel (Close < Lower MA)
-   // 3. Both MAs pointing downwards
+   // 3. Both MAs pointing downwards (if slope check enabled)
    else if(high1 >= upper_ma1 && close1 < lower_ma1 && all_mas_down)
    {
       CancelPendingOrders();
@@ -223,12 +222,21 @@ void PlacePendingOrder(int type)
 
    double lot = CalculateLotSize(active_signal.type, active_signal.signal_high, active_signal.signal_low);
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   int stops_level = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double min_stop_dist = stops_level * point;
 
    if(type == 1) // Buy Stop
    {
       double entry_price = active_signal.signal_high + (InpBreakoutBuffer * point);
+      if(entry_price < ask + min_stop_dist) entry_price = ask + min_stop_dist;
+
       double sl = active_signal.signal_low;
+      if(entry_price - sl < min_stop_dist) sl = entry_price - min_stop_dist;
+
       double tp = entry_price + (active_signal.channel_width * InpChannelTPMult);
+      if(tp - entry_price < min_stop_dist) tp = entry_price + min_stop_dist;
 
       entry_price = NormalizeDouble(entry_price, _Digits);
       sl = NormalizeDouble(sl, _Digits);
@@ -242,8 +250,13 @@ void PlacePendingOrder(int type)
    else if(type == -1) // Sell Stop
    {
       double entry_price = active_signal.signal_low - (InpBreakoutBuffer * point);
+      if(entry_price > bid - min_stop_dist) entry_price = bid - min_stop_dist;
+
       double sl = active_signal.signal_high;
+      if(sl - entry_price < min_stop_dist) sl = entry_price + min_stop_dist;
+
       double tp = entry_price - (active_signal.channel_width * InpChannelTPMult);
+      if(entry_price - tp < min_stop_dist) tp = entry_price - min_stop_dist;
 
       entry_price = NormalizeDouble(entry_price, _Digits);
       sl = NormalizeDouble(sl, _Digits);
@@ -266,6 +279,8 @@ void CheckMarketBreakoutEntry()
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   int stops_level = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double min_stop_dist = stops_level * point;
 
    if(active_signal.type == 1) // Buy Breakout
    {
@@ -273,7 +288,11 @@ void CheckMarketBreakoutEntry()
       if(ask >= target_breakout)
       {
          double sl = active_signal.signal_low;
+         if(ask - sl < min_stop_dist) sl = ask - min_stop_dist;
+
          double tp = ask + (active_signal.channel_width * InpChannelTPMult);
+         if(tp - ask < min_stop_dist) tp = ask + min_stop_dist;
+
          double lot = CalculateLotSize(1, active_signal.signal_high, active_signal.signal_low);
 
          sl = NormalizeDouble(sl, _Digits);
@@ -297,7 +316,11 @@ void CheckMarketBreakoutEntry()
       if(bid <= target_breakout)
       {
          double sl = active_signal.signal_high;
+         if(sl - bid < min_stop_dist) sl = bid + min_stop_dist;
+
          double tp = bid - (active_signal.channel_width * InpChannelTPMult);
+         if(bid - tp < min_stop_dist) tp = bid - min_stop_dist;
+
          double lot = CalculateLotSize(-1, active_signal.signal_high, active_signal.signal_low);
 
          sl = NormalizeDouble(sl, _Digits);
@@ -364,6 +387,11 @@ void ManagePendingOrders()
 //+------------------------------------------------------------------+
 void ManageOpenPositions()
 {
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   int stops_level = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double min_stop_dist = stops_level * point;
+   double min_mod_step = InpMinModStep * point;
+
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -373,31 +401,44 @@ void ManageOpenPositions()
             continue;
 
          ENUM_POSITION_TYPE pos_type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-         double open_price = PositionGetDouble(POSITION_PRICE_OPEN);
          double current_sl = PositionGetDouble(POSITION_SL);
          double current_tp = PositionGetDouble(POSITION_TP);
-         double current_price = (pos_type == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+         double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+         double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
          // Dynamic Trailing Stop based on channel width
          if(InpUseTrailingStop && active_signal.channel_width > 0)
          {
             double trail_dist = active_signal.channel_width * InpTrailingStep;
+
             if(pos_type == POSITION_TYPE_BUY)
             {
-               double new_sl = current_price - trail_dist;
+               double new_sl = bid - trail_dist;
                new_sl = NormalizeDouble(new_sl, _Digits);
-               if(new_sl > current_sl + SymbolInfoDouble(_Symbol, SYMBOL_POINT) && new_sl < current_price)
+
+               // Validate Stop Level distance from current Bid
+               if(bid - new_sl >= min_stop_dist)
                {
-                  trade.PositionModify(ticket, new_sl, current_tp);
+                  // Check if improvement exceeds minimum modification step threshold
+                  if(current_sl == 0 || (new_sl - current_sl >= min_mod_step))
+                  {
+                     trade.PositionModify(ticket, new_sl, current_tp);
+                  }
                }
             }
             else if(pos_type == POSITION_TYPE_SELL)
             {
-               double new_sl = current_price + trail_dist;
+               double new_sl = ask + trail_dist;
                new_sl = NormalizeDouble(new_sl, _Digits);
-               if((current_sl == 0 || new_sl < current_sl - SymbolInfoDouble(_Symbol, SYMBOL_POINT)) && new_sl > current_price)
+
+               // Validate Stop Level distance from current Ask
+               if(new_sl - ask >= min_stop_dist)
                {
-                  trade.PositionModify(ticket, new_sl, current_tp);
+                  // Check if improvement exceeds minimum modification step threshold
+                  if(current_sl == 0 || (current_sl - new_sl >= min_mod_step))
+                  {
+                     trade.PositionModify(ticket, new_sl, current_tp);
+                  }
                }
             }
          }
