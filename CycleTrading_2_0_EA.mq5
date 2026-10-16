@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                              CycleTrading_EA.mq5 |
+//|                                           CycleTrading_2_0_EA.mq5 |
 //|                                  Copyright 2024, Trading Bot      |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024, Trading Bot"
 #property link      "https://www.mql5.com"
-#property version   "1.00"
+#property version   "2.00"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -20,7 +20,9 @@ enum ENUM_TRADE_DIRECTION
 
 //--- Inputs
 input group "=== Parametres Generaux ==="
-input double               InpLotSize               = 0.01;            // Taille des lots
+input double               InpLotSize               = 0.01;            // Taille des lots fixe
+input bool                 InpUseRiskLot            = false;           // Activer le calcul de lot par % de capital (3%)
+input double               InpRiskPercent           = 3.0;             // Pourcentage du capital a risquer par trade (%)
 input int                  InpPendingDistancePoints = 3000;            // Distance des ordres en attente (points)
 input int                  InpSLDistancePoints      = 2000;            // Distance du Stop loss (points)
 input bool                 InpKeepOppositeOrder     = false;           // Activer Mode 2 (Garder ordre oppose pendant position)
@@ -40,8 +42,8 @@ int OnInit()
    ConfigureFillingMode();
    g_position_was_opened = false;
 
-   PrintFormat("[INIT] CycleTrading_EA initialise avec succes sur %s. Magic: %I64u | Mode 2: %s | Direction: %d",
-               _Symbol, InpMagic, InpKeepOppositeOrder ? "TRUE" : "FALSE", (int)InpTradeDirection);
+   PrintFormat("[INIT] CycleTrading 2.0 initialise avec succes sur %s. Magic: %I64u | RiskLot: %s (%.1f%%) | Mode 2: %s | Direction: %d",
+               _Symbol, InpMagic, InpUseRiskLot ? "TRUE" : "FALSE", InpRiskPercent, InpKeepOppositeOrder ? "TRUE" : "FALSE", (int)InpTradeDirection);
    return(INIT_SUCCEEDED);
 }
 
@@ -123,6 +125,41 @@ double NormalizeLot(double lot)
 }
 
 //+------------------------------------------------------------------+
+//| Calculer la taille de lot fixe ou par risque de capital (% capital) |
+//+------------------------------------------------------------------+
+double CalculateLotSize()
+{
+   if(!InpUseRiskLot)
+   {
+      return NormalizeLot(InpLotSize);
+   }
+
+   double capital = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(capital <= 0) capital = AccountInfoDouble(ACCOUNT_EQUITY);
+
+   double risk_amount = capital * (InpRiskPercent / 100.0);
+   double tick_value  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tick_size   = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double point_size  = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+
+   if(tick_value <= 0 || tick_size <= 0 || point_size <= 0 || InpSLDistancePoints <= 0)
+   {
+      return NormalizeLot(InpLotSize);
+   }
+
+   // Perte par lot pour la distance de SL specifiee
+   double loss_per_lot = (InpSLDistancePoints * point_size / tick_size) * tick_value;
+
+   if(loss_per_lot <= 0)
+   {
+      return NormalizeLot(InpLotSize);
+   }
+
+   double calculated_lot = risk_amount / loss_per_lot;
+   return NormalizeLot(calculated_lot);
+}
+
+//+------------------------------------------------------------------+
 //| Compter les positions actives pour ce symbole et magic number    |
 //+------------------------------------------------------------------+
 int CountActivePositions()
@@ -200,13 +237,14 @@ void StartNewCycle()
    // 1. Calcul du Prix Actuel de reference = (Ask + Bid) / 2
    double ref_price  = NormalizeDouble((ask + bid) / 2.0, _Digits);
    double point_size = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   double trade_lot  = NormalizeLot(InpLotSize);
+   double trade_lot  = CalculateLotSize();
 
    // Validation de la distance minimale par rapport au StopLevel du courtier
    long stop_level = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
    int min_distance = (int)MathMax(InpPendingDistancePoints, stop_level);
 
-   PrintFormat("[CYCLE START] Nouveau cycle demarre. Prix ref: %.*f | Lot: %.2f", _Digits, ref_price, trade_lot);
+   PrintFormat("[CYCLE START 2.0] Nouveau cycle demarre. Prix ref: %.*f | Lot: %.2f (RiskMode: %s)",
+               _Digits, ref_price, trade_lot, InpUseRiskLot ? "3%" : "Fixed");
 
    // Placer Ordre Buy Limit
    if(InpTradeDirection == DIRECTION_BOTH || InpTradeDirection == DIRECTION_BUY_ONLY)
@@ -215,7 +253,7 @@ void StartNewCycle()
       double buy_sl    = NormalizeDouble(buy_price - InpSLDistancePoints * point_size, _Digits);
       double buy_tp    = ref_price; // TP au prix actuel de reference initial
 
-      if(trade.BuyLimit(trade_lot, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Cycle Trading Buy Limit"))
+      if(trade.BuyLimit(trade_lot, buy_price, _Symbol, buy_sl, buy_tp, ORDER_TIME_GTC, 0, "Cycle Trading 2.0 Buy Limit"))
       {
          PrintFormat("[ORDER OK] Buy Limit place a %.*f | SL: %.*f | TP: %.*f", _Digits, buy_price, _Digits, buy_sl, _Digits, buy_tp);
       }
@@ -232,7 +270,7 @@ void StartNewCycle()
       double sell_sl    = NormalizeDouble(sell_price + InpSLDistancePoints * point_size, _Digits);
       double sell_tp    = ref_price; // TP au prix actuel de reference initial
 
-      if(trade.SellLimit(trade_lot, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Cycle Trading Sell Limit"))
+      if(trade.SellLimit(trade_lot, sell_price, _Symbol, sell_sl, sell_tp, ORDER_TIME_GTC, 0, "Cycle Trading 2.0 Sell Limit"))
       {
          PrintFormat("[ORDER OK] Sell Limit place a %.*f | SL: %.*f | TP: %.*f", _Digits, sell_price, _Digits, sell_sl, _Digits, sell_tp);
       }
