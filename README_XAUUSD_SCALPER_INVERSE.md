@@ -1,41 +1,32 @@
-# XAUUSD Momentum Scalper Inverse EA - Documentation Technique
+# XAUUSD Momentum Scalper Inverse EA (Version 2) - Documentation Technique
 
-## 1. Concept & Logique Inverse
+## 1. Inversion Totale de la Stratégie (Variante Miroir)
 
-Le **XAUUSD Momentum Scalper Inverse EA** (`XAUUSD_Momentum_Scalper_Inverse_EA.mq5`) est une variante **miroir/inversée** de la stratégie originale.
+Le **XAUUSD Momentum Scalper Inverse EA** (`XAUUSD_Momentum_Scalper_Inverse_EA.mq5`) est la variante **exactement contraire et inversée** du robot original (Version 1).
 
-### Objectif de la Variante Inverse
-Cette version est conçue pour produire exactement **l'inverse symétrique des résultats de la version 1** sous des conditions de marché identiques :
-* Si la **Version 1 (Standard)** réalise **1 000 € de profit** et **800 € de perte**,
-* La **Version Inverse (v2)** réalisera dans les mêmes conditions **1 000 € de perte** et **800 € de profit**.
-
----
-
-## 2. Règle de Prise de Position Miroir
-
-Le filtrage des indicateurs (Parabolic SAR, EMA 8, EMA 21, ATR 14) reste rigoureusement identique pour détecter les points d'inflexion du marché, mais **l'exécution des ordres est totalement inversée** :
-
-* **Signal d'Achat détecté (BUY Signal)** :
-  * *Version Standard* : Ouvre une position **BUY**
-  * *Version Inverse* : Ouvre une position **SELL** (au prix Bid avec SL et TP inversés).
-
-* **Signal de Vente détecté (SELL Signal)** :
-  * *Version Standard* : Ouvre une position **SELL**
-  * *Version Inverse* : Ouvre une position **BUY** (au prix Ask avec SL et TP inversés).
+### Principe Mathématique d'Inversion
+L'objectif de cette Version 2 est d'inverser complètement les résultats de trading par rapport à la Version 1 dans toutes les conditions de marché :
+* Si la **Version 1** réalise **1 000 € de profit** et **800 € de perte**,
+* La **Version 2 (Inverse)** réalise dans les mêmes conditions exactes **1 000 € de perte** et **800 € de profit**.
 
 ---
 
-## 3. Paramètres de Configuration
+## 2. Inversion Complète des Conditions de Trading
 
-| Paramètre | Valeur par défaut | Description |
+Chaque condition d'entrée et chaque paramètre d'objectif sont inversés de manière stricte :
+
+| Élément | Version 1 (Standard) | Version 2 (Inversée / Contrarienne) |
 | :--- | :--- | :--- |
-| `InpTimeframe` | `PERIOD_M5` | Unité de temps M5 |
-| `InpRiskMode` | `RISK_PERCENT_EQUITY` | Calcul du lot basé sur l'Equity (Compounding) |
-| `InpRiskPercent` | `2.5` | Pourcentage de risque par position |
-| `InpStopLossPoints` | `250` | Stop Loss en points (équivalent au TP de la version standard) |
-| `InpTakeProfitPoints` | `500` | Take Profit en points (équivalent au SL de la version standard) |
-| `InpMagicNumber` | `151889` | Identifiant Magic Number distinct pour la variante inverse |
+| **Condition d'Achat (BUY)** | Clôture > SAR, EMA 8 > EMA 21, Cassure du haut | **Inversée** : Déclenchée par la condition de Vente V1 |
+| **Condition de Vente (SELL)** | Clôture < SAR, EMA 8 < EMA 21, Cassure du bas | **Inversée** : Déclenchée par la condition d'Achat V1 |
+| **Stop Loss (SL)** | 250 points ($2.50) | 500 points ($5.00) (Inversé avec le TP de V1) |
+| **Take Profit (TP)** | 500 points ($5.00) | 250 points ($2.50) (Inversé avec le SL de V1) |
+| **Magic Number** | `151888` | `151889` |
 
 ---
 
-*Fichier faisant partie de la suite d'EAs MQL5 pour MetaTrader 5.*
+## 3. Déroulement Pratique sur le Marché
+
+1. Lorsque la Version 1 détecte un signal d'Achat et ouvre une position **BUY**, la Version 2 détecte le même signal mais ouvre une position **SELL**.
+2. Lorsque la Version 1 détecte un signal de Vente et ouvre une position **SELL**, la Version 2 détecte le même signal mais ouvre une position **BUY**.
+3. Les niveaux de Stop Loss et Take Profit étant inversés (SL = 500 points, TP = 250 points), le payoff ratio est inversé, assurant une parfaite symétrie miroir des performances financières.

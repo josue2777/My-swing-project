@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                            XAUUSD_Momentum_Scalper_Inverse_EA.mq5 |
 //|                             Copyright 2025, High-Yield Quant Lab |
-//|                             INVERSE STRATEGY VARIANT (Contrarian)|
+//|                             INVERSE STRATEGY VARIANT (Total Rev) |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, High-Yield Quant Lab"
 #property link      "https://github.com"
 #property version   "1.00"
-#property description "Expert Advisor XAUUSD Momentum Scalper - INVERSE VARIANT (Executes inverted orders on signals to mirror/reverse results)"
+#property description "Expert Advisor XAUUSD Momentum Scalper - TOTAL INVERSE VARIANT (Explicite inversion of Buy/Sell conditions and parameters)"
 
 #include <Trade\Trade.mqh>
 
@@ -19,7 +19,7 @@ enum ENUM_RISK_MODE
   };
 
 //--- Input Parameters
-input group "== Strategy Parameters (INVERSE VARIANT) =="
+input group "== Strategy Parameters (TOTAL INVERSE VARIANT) =="
 input ENUM_TIMEFRAMES InpTimeframe         = PERIOD_M5;  // Strategy Timeframe
 input double          InpSarStep           = 0.02;       // Parabolic SAR Step
 input double          InpSarMaximum        = 0.20;       // Parabolic SAR Maximum
@@ -29,12 +29,12 @@ input int             InpATRPeriod         = 14;         // ATR Volatility Perio
 input double          InpMinATRPoints      = 80.0;       // Minimum Volatility ATR Filter (Points)
 input double          InpBreakoutPoints    = 30.0;       // Channel Breakout Offset (Points)
 
-input group "== Risk & Capital Management (Mirror Allocation) =="
+input group "== Risk & Capital Management (Mirrored Risk Parameters) =="
 input ENUM_RISK_MODE InpRiskMode          = RISK_PERCENT_EQUITY; // Risk Allocation Mode
 input double          InpRiskPercent       = 2.5;        // Risk Percent Per Trade (%)
 input double          InpFixedLot          = 0.10;       // Fixed Lot Size
-input int             InpStopLossPoints    = 500;        // Inverted Stop Loss (equals original Take Profit of 500 pts)
-input int             InpTakeProfitPoints  = 250;        // Inverted Take Profit (equals original Stop Loss of 250 pts)
+input int             InpStopLossPoints    = 500;        // Inverted Stop Loss (Inverted SL = V1 Take Profit = 500 points)
+input int             InpTakeProfitPoints  = 250;        // Inverted Take Profit (Inverted TP = V1 Stop Loss = 250 points)
 input int             InpBreakEvenPoints   = 150;        // Trigger Break-Even in Points
 input int             InpBreakEvenProfit   = 30;         // Profit Lock in Points on Break-Even
 input int             InpTrailingStopPoints= 200;        // Trailing Stop Distance in Points
@@ -102,7 +102,7 @@ int OnInit()
       return(INIT_FAILED);
      }
 
-   Print("XAUUSD_Momentum_Scalper_Inverse_EA initialized successfully.");
+   Print("XAUUSD_Momentum_Scalper_Inverse_EA (Total Inverse Variant) initialized successfully.");
    return(INIT_SUCCEEDED);
   }
 
@@ -123,13 +123,13 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
-   // 1. Manage Active Positions (Trailing Stop & Break-Even on every tick)
+   // 1. Manage Active Positions
    ManageOpenPositions();
 
    // 2. Check Bar Confirmation for New Signal Execution
    datetime current_bar_time = iTime(_Symbol, InpTimeframe, 0);
    if(current_bar_time == last_bar_time)
-      return; // Wait for new bar to evaluate entry signal
+      return; // Wait for new bar
 
    // 3. Spread Filter Check
    long current_spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
@@ -162,38 +162,27 @@ void OnTick()
    double high_1  = iHigh(_Symbol, InpTimeframe, 1);
    double low_1   = iLow(_Symbol, InpTimeframe, 1);
 
-   // Volatility Threshold Check (ATR in points)
+   // Volatility Threshold Check
    double atr_points = atr_val[0] / _Point;
    if(atr_points < InpMinATRPoints)
       return;
 
-   // Original Signal Conditions
-   bool buy_trend  = (close_1 > sar_val[0]) && (ema_f_val[0] > ema_s_val[0]);
-   bool sell_trend = (close_1 < sar_val[0]) && (ema_f_val[0] < ema_s_val[0]);
+   // --- TOTAL INVERSION OF CONDITIONS ---
+   // V1 Buy Condition:  (close_1 > sar_val[0]) && (ema_f_val[0] > ema_s_val[0]) && (high_1 > ema_f_val[0] + InpBreakoutPoints * _Point)
+   // V1 Sell Condition: (close_1 < sar_val[0]) && (ema_f_val[0] < ema_s_val[0]) && (low_1  < ema_f_val[0] - InpBreakoutPoints * _Point)
 
-   bool buy_breakout  = buy_trend  && (high_1 > (ema_f_val[0] + InpBreakoutPoints * _Point));
-   bool sell_breakout = sell_trend && (low_1  < (ema_f_val[0] - InpBreakoutPoints * _Point));
+   // In V2 (Inverse EA):
+   // - V2 BUY Condition  = V1 Sell Condition (When V1 triggers SELL, V2 buys)
+   // - V2 SELL Condition = V1 Buy Condition  (When V1 triggers BUY, V2 sells)
 
-   // --- INVERTED EXECUTION LOGIC ---
-   // When original strategy signals BUY -> INVERSE VARIANT OPENS SELL
-   // When original strategy signals SELL -> INVERSE VARIANT OPENS BUY
-   if(buy_breakout)
-     {
-      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double sl  = (InpStopLossPoints > 0) ? NormalizeDouble(bid + InpStopLossPoints * _Point, _Digits) : 0;
-      double tp  = (InpTakeProfitPoints > 0) ? NormalizeDouble(bid - InpTakeProfitPoints * _Point, _Digits) : 0;
-      double lot = CalculateLotSize(InpStopLossPoints);
+   bool v1_buy_signal  = (close_1 > sar_val[0]) && (ema_f_val[0] > ema_s_val[0]) && (high_1 > (ema_f_val[0] + InpBreakoutPoints * _Point));
+   bool v1_sell_signal = (close_1 < sar_val[0]) && (ema_f_val[0] < ema_s_val[0]) && (low_1  < (ema_f_val[0] - InpBreakoutPoints * _Point));
 
-      if(lot > 0)
-        {
-         if(trade.Sell(lot, _Symbol, bid, sl, tp, "XAU_INV_SELL"))
-           {
-            Print("INVERSE SELL Order Opened (on BUY Signal): Lot ", lot, " Bid: ", bid, " SL: ", sl, " TP: ", tp);
-            last_bar_time = current_bar_time;
-           }
-        }
-     }
-   else if(sell_breakout)
+   bool v2_buy_condition  = v1_sell_signal; // Condition de Vente V1 devient Condition d'Achat V2
+   bool v2_sell_condition = v1_buy_signal;  // Condition d'Achat V1 devient Condition de Vente V2
+
+   // Execute Trade for V2
+   if(v2_buy_condition)
      {
       double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       double sl  = (InpStopLossPoints > 0) ? NormalizeDouble(ask - InpStopLossPoints * _Point, _Digits) : 0;
@@ -204,7 +193,23 @@ void OnTick()
         {
          if(trade.Buy(lot, _Symbol, ask, sl, tp, "XAU_INV_BUY"))
            {
-            Print("INVERSE BUY Order Opened (on SELL Signal): Lot ", lot, " Ask: ", ask, " SL: ", sl, " TP: ", tp);
+            Print("TOTAL INVERSE BUY Opened (V1 Sell Signal): Lot ", lot, " Ask: ", ask, " SL: ", sl, " TP: ", tp);
+            last_bar_time = current_bar_time;
+           }
+        }
+     }
+   else if(v2_sell_condition)
+     {
+      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double sl  = (InpStopLossPoints > 0) ? NormalizeDouble(bid + InpStopLossPoints * _Point, _Digits) : 0;
+      double tp  = (InpTakeProfitPoints > 0) ? NormalizeDouble(bid - InpTakeProfitPoints * _Point, _Digits) : 0;
+      double lot = CalculateLotSize(InpStopLossPoints);
+
+      if(lot > 0)
+        {
+         if(trade.Sell(lot, _Symbol, bid, sl, tp, "XAU_INV_SELL"))
+           {
+            Print("TOTAL INVERSE SELL Opened (V1 Buy Signal): Lot ", lot, " Bid: ", bid, " SL: ", sl, " TP: ", tp);
             last_bar_time = current_bar_time;
            }
         }
