@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, High-Yield Quant Lab"
 #property link      "https://github.com"
-#property version   "1.00"
-#property description "Expert Advisor XAUUSD High-Yield Momentum Scalper based on Parabolic SAR, Fast EMA Channel Breakout, and Dynamic Risk Compounding"
+#property version   "1.10"
+#property description "Expert Advisor XAUUSD High-Yield Momentum Scalper based on Parabolic SAR, Fast EMA Channel Breakout, and Dynamic Risk Compounding (Includes Inversion Mode Toggle)"
 
 #include <Trade\Trade.mqh>
 
@@ -19,7 +19,8 @@ enum ENUM_RISK_MODE
   };
 
 //--- Input Parameters
-input group "== Strategy Parameters =="
+input group "== Strategy Parameters & Mode =="
+input bool            InpInvertStrategy    = false;      // True = Activate INVERSE MODE (V2), False = Standard (V1)
 input ENUM_TIMEFRAMES InpTimeframe         = PERIOD_M5;  // Strategy Timeframe
 input double          InpSarStep           = 0.02;       // Parabolic SAR Step
 input double          InpSarMaximum        = 0.20;       // Parabolic SAR Maximum
@@ -29,12 +30,12 @@ input int             InpATRPeriod         = 14;         // ATR Volatility Perio
 input double          InpMinATRPoints      = 80.0;       // Minimum Volatility ATR Filter (Points)
 input double          InpBreakoutPoints    = 30.0;       // Channel Breakout Offset (Points)
 
-input group "== Risk & Capital Management (Target ~50%/Month) =="
+input group "== Risk & Capital Management =="
 input ENUM_RISK_MODE InpRiskMode          = RISK_PERCENT_EQUITY; // Risk Allocation Mode
 input double          InpRiskPercent       = 2.5;        // Risk Percent Per Trade (%)
 input double          InpFixedLot          = 0.10;       // Fixed Lot Size
-input int             InpStopLossPoints    = 250;        // Stop Loss in Points (e.g. 250 = $2.50 XAU)
-input int             InpTakeProfitPoints  = 500;        // Take Profit in Points (e.g. 500 = $5.00 XAU)
+input int             InpStopLossPoints    = 250;        // Stop Loss in Points (Standard V1 = 250)
+input int             InpTakeProfitPoints  = 500;        // Take Profit in Points (Standard V1 = 500)
 input int             InpBreakEvenPoints   = 150;        // Trigger Break-Even in Points
 input int             InpBreakEvenProfit   = 30;         // Profit Lock in Points on Break-Even
 input int             InpTrailingStopPoints= 200;        // Trailing Stop Distance in Points
@@ -102,7 +103,7 @@ int OnInit()
       return(INIT_FAILED);
      }
 
-   Print("XAUUSD_Momentum_Scalper_EA initialized successfully.");
+   Print("XAUUSD_Momentum_Scalper_EA initialized. Invert Mode = ", InpInvertStrategy ? "ACTIVE (V2)" : "DISABLED (V1)");
    return(INIT_SUCCEEDED);
   }
 
@@ -123,13 +124,13 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
-   // 1. Manage Active Positions (Trailing Stop & Break-Even on every tick)
+   // 1. Manage Active Positions
    ManageOpenPositions();
 
    // 2. Check Bar Confirmation for New Signal Execution
    datetime current_bar_time = iTime(_Symbol, InpTimeframe, 0);
    if(current_bar_time == last_bar_time)
-      return; // Wait for new bar to evaluate entry signal
+      return; // Wait for new bar
 
    // 3. Spread Filter Check
    long current_spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
@@ -162,47 +163,60 @@ void OnTick()
    double high_1  = iHigh(_Symbol, InpTimeframe, 1);
    double low_1   = iLow(_Symbol, InpTimeframe, 1);
 
-   // Volatility Threshold Check (ATR in points)
+   // Volatility Threshold Check
    double atr_points = atr_val[0] / _Point;
    if(atr_points < InpMinATRPoints)
       return;
 
-   // Signal Conditions
-   bool buy_trend  = (close_1 > sar_val[0]) && (ema_f_val[0] > ema_s_val[0]);
-   bool sell_trend = (close_1 < sar_val[0]) && (ema_f_val[0] < ema_s_val[0]);
+   // Standard V1 Signals
+   bool raw_buy_signal  = (close_1 > sar_val[0]) && (ema_f_val[0] > ema_s_val[0]) && (high_1 > (ema_f_val[0] + InpBreakoutPoints * _Point));
+   bool raw_sell_signal = (close_1 < sar_val[0]) && (ema_f_val[0] < ema_s_val[0]) && (low_1  < (ema_f_val[0] - InpBreakoutPoints * _Point));
 
-   bool buy_breakout  = buy_trend  && (high_1 > (ema_f_val[0] + InpBreakoutPoints * _Point));
-   bool sell_breakout = sell_trend && (low_1  < (ema_f_val[0] - InpBreakoutPoints * _Point));
+   // Determine Execution Direction & SL/TP based on InpInvertStrategy
+   bool execute_buy  = InpInvertStrategy ? raw_sell_signal : raw_buy_signal;
+   bool execute_sell = InpInvertStrategy ? raw_buy_signal  : raw_sell_signal;
+
+   int effective_sl = InpStopLossPoints;
+   int effective_tp = InpTakeProfitPoints;
+
+   // If Inverse mode is enabled and user left standard defaults (SL=250, TP=500), auto-swap effective SL and TP for exact payoff mirroring
+   if(InpInvertStrategy && InpStopLossPoints == 250 && InpTakeProfitPoints == 500)
+     {
+      effective_sl = 500;
+      effective_tp = 250;
+     }
 
    // Execute Trade
-   if(buy_breakout)
+   if(execute_buy)
      {
       double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-      double sl  = (InpStopLossPoints > 0) ? NormalizeDouble(ask - InpStopLossPoints * _Point, _Digits) : 0;
-      double tp  = (InpTakeProfitPoints > 0) ? NormalizeDouble(ask + InpTakeProfitPoints * _Point, _Digits) : 0;
-      double lot = CalculateLotSize(InpStopLossPoints);
+      double sl  = (effective_sl > 0) ? NormalizeDouble(ask - effective_sl * _Point, _Digits) : 0;
+      double tp  = (effective_tp > 0) ? NormalizeDouble(ask + effective_tp * _Point, _Digits) : 0;
+      double lot = CalculateLotSize(effective_sl);
 
       if(lot > 0)
         {
-         if(trade.Buy(lot, _Symbol, ask, sl, tp, "XAU_MOM_BUY"))
+         string comment = InpInvertStrategy ? "XAU_INV_BUY" : "XAU_STD_BUY";
+         if(trade.Buy(lot, _Symbol, ask, sl, tp, comment))
            {
-            Print("BUY Order Opened: Lot ", lot, " Ask: ", ask, " SL: ", sl, " TP: ", tp);
+            Print("BUY Order Opened [Mode: ", InpInvertStrategy ? "INVERSE" : "STANDARD", "]: Lot ", lot, " Ask: ", ask, " SL: ", sl, " TP: ", tp);
             last_bar_time = current_bar_time;
            }
         }
      }
-   else if(sell_breakout)
+   else if(execute_sell)
      {
       double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double sl  = (InpStopLossPoints > 0) ? NormalizeDouble(bid + InpStopLossPoints * _Point, _Digits) : 0;
-      double tp  = (InpTakeProfitPoints > 0) ? NormalizeDouble(bid - InpTakeProfitPoints * _Point, _Digits) : 0;
-      double lot = CalculateLotSize(InpStopLossPoints);
+      double sl  = (effective_sl > 0) ? NormalizeDouble(bid + effective_sl * _Point, _Digits) : 0;
+      double tp  = (effective_tp > 0) ? NormalizeDouble(bid - effective_tp * _Point, _Digits) : 0;
+      double lot = CalculateLotSize(effective_sl);
 
       if(lot > 0)
         {
-         if(trade.Sell(lot, _Symbol, bid, sl, tp, "XAU_MOM_SELL"))
+         string comment = InpInvertStrategy ? "XAU_INV_SELL" : "XAU_STD_SELL";
+         if(trade.Sell(lot, _Symbol, bid, sl, tp, comment))
            {
-            Print("SELL Order Opened: Lot ", lot, " Bid: ", bid, " SL: ", sl, " TP: ", tp);
+            Print("SELL Order Opened [Mode: ", InpInvertStrategy ? "INVERSE" : "STANDARD", "]: Lot ", lot, " Bid: ", bid, " SL: ", sl, " TP: ", tp);
             last_bar_time = current_bar_time;
            }
         }
