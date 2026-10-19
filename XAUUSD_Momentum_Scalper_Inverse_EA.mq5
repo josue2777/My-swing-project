@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, High-Yield Quant Lab"
 #property link      "https://github.com"
-#property version   "1.00"
-#property description "Expert Advisor XAUUSD Momentum Scalper - PURE INVERSE STRATEGY (Pure inverted rules without original strategy code)"
+#property version   "1.10"
+#property description "Expert Advisor XAUUSD Momentum Scalper - PURE INVERSE STRATEGY (Pure inverted rules with conflict-free position management)"
 
 #include <Trade\Trade.mqh>
 
@@ -168,10 +168,7 @@ void OnTick()
       return;
 
    // --- PURE INVERTED SIGNALS ---
-   // Pure Inverted BUY Signal: Price < SAR, Fast EMA < Slow EMA, and Low breaks below Fast EMA channel
    bool inverted_buy_signal  = (close_1 < sar_val[0]) && (ema_f_val[0] < ema_s_val[0]) && (low_1  < (ema_f_val[0] - InpBreakoutPoints * _Point));
-
-   // Pure Inverted SELL Signal: Price > SAR, Fast EMA > Slow EMA, and High breaks above Fast EMA channel
    bool inverted_sell_signal = (close_1 > sar_val[0]) && (ema_f_val[0] > ema_s_val[0]) && (high_1 > (ema_f_val[0] + InpBreakoutPoints * _Point));
 
    // Execute Trade
@@ -282,14 +279,18 @@ int CountActivePositions()
   }
 
 //+------------------------------------------------------------------+
-//| Dynamic Trailing Stop and Break-Even Management                  |
+//| Dynamic Trailing Stop and Break-Even Management (Conflict-Free)   |
 //+------------------------------------------------------------------+
 void ManageOpenPositions()
   {
-   int stops_level = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   // Query Broker Limit Constraints
+   int stops_level  = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   int freeze_level = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   int min_dist_pts = MathMax(stops_level, freeze_level);
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
+      // Ensure position matches symbol and magic number (Compatible with Netting & Hedging)
       if(PositionGetSymbol(i) != _Symbol) continue;
       if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
 
@@ -297,75 +298,102 @@ void ManageOpenPositions()
       long   pos_type  = PositionGetInteger(POSITION_TYPE);
       double open_price= PositionGetDouble(POSITION_PRICE_OPEN);
       double current_sl= PositionGetDouble(POSITION_SL);
+      double current_tp= PositionGetDouble(POSITION_TP);
       double ask       = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       double bid       = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-      // --- BUY POSITIONS ---
+      // --- BUY POSITIONS MANAGEMENT ---
       if(pos_type == POSITION_TYPE_BUY)
         {
-         // 1. Break-Even Check
-         if(InpBreakEvenPoints > 0)
+         // Target Break-Even level (Entry Price + Lock Offset)
+         double target_be_sl = NormalizeDouble(open_price + InpBreakEvenProfit * _Point, _Digits);
+
+         // Internal State Flag: Check if Break-Even was ALREADY executed successfully or disabled by user
+         bool is_be_applied = (InpBreakEvenPoints <= 0) || ((current_sl > 0) && (current_sl >= target_be_sl - _Point));
+
+         // --- ETAPE 1 : EXECUTION UNIQUE DU BREAK-EVEN ---
+         if(!is_be_applied)
            {
-            double be_price = NormalizeDouble(open_price + InpBreakEvenProfit * _Point, _Digits);
-            if(bid - open_price >= InpBreakEvenPoints * _Point && (current_sl < be_price || current_sl == 0))
+            // Evaluate if profit threshold for Break-Even is reached
+            if(InpBreakEvenPoints > 0 && (bid - open_price) >= InpBreakEvenPoints * _Point)
               {
-               if(bid - be_price > stops_level * _Point)
+               // Verify Broker distance constraint: Bid - target_be_sl > min_dist_pts * _Point
+               if((bid - target_be_sl) > min_dist_pts * _Point)
                  {
-                  trade.PositionModify(ticket, be_price, PositionGetDouble(POSITION_TP));
-                  Print("BUY Position #", ticket, " set to Break-Even at ", be_price);
-                  continue;
+                  if(trade.PositionModify(ticket, target_be_sl, current_tp))
+                    {
+                     Print("BUY Position #", ticket, " successfully secured to Break-Even at ", target_be_sl);
+                    }
                  }
               }
+            // Trailing Stop is strictly BLOCKED until Break-Even is applied
+            continue;
            }
 
-         // 2. Trailing Stop Check
+         // --- ETAPE 2 : RELAIS EXCLUSIF DU TRAILING STOP (Apres Break-Even) ---
          if(InpTrailingStopPoints > 0)
            {
-            double desired_sl = NormalizeDouble(bid - InpTrailingStopPoints * _Point, _Digits);
-            if(bid - open_price > InpTrailingStopPoints * _Point)
+            // Calculate candidate Trailing Stop level
+            double new_trailing_sl = NormalizeDouble(bid - InpTrailingStopPoints * _Point, _Digits);
+
+            // Constraint Check: New Trailing SL MUST strictly improve current SL by at least InpTrailingStepPoints
+            if((new_trailing_sl - current_sl) >= InpTrailingStepPoints * _Point)
               {
-               if(desired_sl - current_sl >= InpTrailingStepPoints * _Point || current_sl == 0)
+               // Check broker distance constraint from current market bid price
+               if((bid - new_trailing_sl) > min_dist_pts * _Point)
                  {
-                  if(bid - desired_sl > stops_level * _Point)
+                  if(trade.PositionModify(ticket, new_trailing_sl, current_tp))
                     {
-                     trade.PositionModify(ticket, desired_sl, PositionGetDouble(POSITION_TP));
-                     Print("BUY Trailing Stop updated for #", ticket, " to ", desired_sl);
+                     Print("BUY Trailing Stop updated for #", ticket, " from ", current_sl, " to ", new_trailing_sl);
                     }
                  }
               }
            }
         }
 
-      // --- SELL POSITIONS ---
+      // --- SELL POSITIONS MANAGEMENT ---
       else if(pos_type == POSITION_TYPE_SELL)
         {
-         // 1. Break-Even Check
-         if(InpBreakEvenPoints > 0)
+         // Target Break-Even level for SELL (Entry Price - Lock Offset)
+         double target_be_sl = NormalizeDouble(open_price - InpBreakEvenProfit * _Point, _Digits);
+
+         // Internal State Flag: Check if Break-Even was ALREADY executed successfully or disabled by user
+         bool is_be_applied = (InpBreakEvenPoints <= 0) || ((current_sl > 0) && (current_sl <= target_be_sl + _Point));
+
+         // --- ETAPE 1 : EXECUTION UNIQUE DU BREAK-EVEN ---
+         if(!is_be_applied)
            {
-            double be_price = NormalizeDouble(open_price - InpBreakEvenProfit * _Point, _Digits);
-            if(open_price - ask >= InpBreakEvenPoints * _Point && (current_sl > be_price || current_sl == 0))
+            // Evaluate if profit threshold for Break-Even is reached
+            if(InpBreakEvenPoints > 0 && (open_price - ask) >= InpBreakEvenPoints * _Point)
               {
-               if(be_price - ask > stops_level * _Point)
+               // Verify Broker distance constraint: target_be_sl - Ask > min_dist_pts * _Point
+               if((target_be_sl - ask) > min_dist_pts * _Point)
                  {
-                  trade.PositionModify(ticket, be_price, PositionGetDouble(POSITION_TP));
-                  Print("SELL Position #", ticket, " set to Break-Even at ", be_price);
-                  continue;
+                  if(trade.PositionModify(ticket, target_be_sl, current_tp))
+                    {
+                     Print("SELL Position #", ticket, " successfully secured to Break-Even at ", target_be_sl);
+                    }
                  }
               }
+            // Trailing Stop is strictly BLOCKED until Break-Even is applied
+            continue;
            }
 
-         // 2. Trailing Stop Check
+         // --- ETAPE 2 : RELAIS EXCLUSIF DU TRAILING STOP (Apres Break-Even) ---
          if(InpTrailingStopPoints > 0)
            {
-            double desired_sl = NormalizeDouble(ask + InpTrailingStopPoints * _Point, _Digits);
-            if(open_price - ask > InpTrailingStopPoints * _Point)
+            // Calculate candidate Trailing Stop level
+            double new_trailing_sl = NormalizeDouble(ask + InpTrailingStopPoints * _Point, _Digits);
+
+            // Constraint Check: New Trailing SL MUST strictly improve current SL (lower for SELL) by at least InpTrailingStepPoints
+            if((current_sl - new_trailing_sl) >= InpTrailingStepPoints * _Point)
               {
-               if(current_sl - desired_sl >= InpTrailingStepPoints * _Point || current_sl == 0)
+               // Check broker distance constraint from current market ask price
+               if((new_trailing_sl - ask) > min_dist_pts * _Point)
                  {
-                  if(desired_sl - ask > stops_level * _Point)
+                  if(trade.PositionModify(ticket, new_trailing_sl, current_tp))
                     {
-                     trade.PositionModify(ticket, desired_sl, PositionGetDouble(POSITION_TP));
-                     Print("SELL Trailing Stop updated for #", ticket, " to ", desired_sl);
+                     Print("SELL Trailing Stop updated for #", ticket, " from ", current_sl, " to ", new_trailing_sl);
                     }
                  }
               }
